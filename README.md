@@ -147,6 +147,15 @@ python3 -m unittest discover -s tests -p "test_*.py" -v
 
 The tests use a scripted fake Bedrock client for the pipeline and a real boto3 client with a stubber for request shapes (so a misspelled Converse field fails a test), and moto for DynamoDB. They cover the safety rules, route ordering, error handling, the road-route client (with the network mocked) and the HTTP layer. They do not call real AWS or the real routing service.
 
+For browser regressions, install Chrome and run:
+
+```bash
+pip install playwright
+python3 scripts/browser_regressions.py
+```
+
+This starts an isolated local server and Chrome session. It checks Enter and Shift+Enter, mobile search events, delayed location loading, location selection, saved plans, road geometry and retry, stale route responses, responsive layout, and offline cache updates. Routing is mocked and AI is disabled. Alternatively, run `playwright install chromium` and set `BROWSER_CHANNEL=chromium`.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -156,7 +165,7 @@ The tests use a scripted fake Bedrock client for the pipeline and a real boto3 c
 | Error about an inference profile or `us.` model | Your account may block cross-region profiles. The chain already falls through to in-region Nova models. Or set `BEDROCK_MODEL_IDS` to a model you can use. |
 | `no credentials` in the trace | Export credentials (local) or check the Lambda role (deployed). The app answers with rules in the meantime. |
 | Request takes too long | The Lambda limit is 29 seconds (the API Gateway limit). Each stage may use up to 24 seconds of model time, never more than the request has left minus a 3 second reserve. Each call gets a timeout that fits in the time left, the SDK never retries on its own, and no call or JSON repair starts with under 5 seconds left. Then the app falls back to rules. |
-| The map line is dashed and straight | The routing service could not be reached (the function may have no internet, or the free service is busy). The plan and Directions buttons still work. Try again in a minute. |
+| The map line is dashed and straight | The routing service could not be reached (the function may have no internet, or the free service is busy). The dashed line connects stops; it is not a driving route. Click **Retry road route** or open **Turn-by-turn in Google Maps**. Transient routing failures are retried once automatically. |
 | Map background blank | Map tiles come from OpenStreetMap and need a network. They also need the browser to send a Referer, so the app sets `Referrer-Policy: strict-origin-when-cross-origin`. A privacy extension that strips Referer will blank the tiles. The app shows a notice, and the route, stops and list still work. |
 | `deploy.sh` fails on the bucket | Set `ARTIFACT_BUCKET` to a bucket you own, or check your credentials with `aws sts get-caller-identity`. |
 

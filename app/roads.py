@@ -14,6 +14,7 @@ The return shape would stay the same.
 """
 import json
 import logging
+import math
 import os
 import time
 import urllib.error
@@ -26,8 +27,9 @@ BASE_URL = os.environ.get("ROAD_ROUTING_URL", "https://router.project-osrm.org")
 USER_AGENT = "SupplyLine-hackathon-demo/1.0"
 TIMEOUT_S = 6
 MAX_POINTS = 8
-MAX_PATH_POINTS = 2500
+MAX_PATH_POINTS = 50000
 CACHE_MAX = 200
+CACHE_MAX_VERTICES = 100000
 CACHE_TTL_S = 600
 
 _cache = OrderedDict()
@@ -44,13 +46,17 @@ def _open(url, timeout):
         return r.read(3_000_000)
 
 
-def _thin(path, limit=MAX_PATH_POINTS):
-    if len(path) <= limit:
-        return path
-    step = len(path) / float(limit - 1)
-    out = [path[int(i * step)] for i in range(limit - 1)]
-    out.append(path[-1])
-    return out
+def _number(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError("Non-finite routing value")
+    return value
+
+
+def _measure(value, scale, precision):
+    value = _number(value)
+    if value < 0:
+        raise ValueError("Negative routing measure")
+    return round(value / scale, precision)
 
 
 def fetch_route(points):
@@ -66,30 +72,40 @@ def fetch_route(points):
 
     coords = ";".join(f"{lng:.5f},{lat:.5f}" for lat, lng in key)
     url = f"{BASE_URL}/route/v1/driving/{coords}?overview=full&geometries=geojson&steps=false&alternatives=false"
-    try:
-        data = json.loads(_open(url, TIMEOUT_S))
-    except (urllib.error.URLError, OSError, ValueError) as e:
-        log.warning("road routing unavailable: %s", e)
-        raise RoadsUnavailable("Road directions are not available right now.")
+    # One retry for a transient transport failure, within the API's 29-second budget.
+    for attempt in range(2):
+        try:
+            data = json.loads(_open(url, TIMEOUT_S))
+            break
+        except (urllib.error.URLError, OSError, ValueError) as e:
+            log.warning("road routing unavailable: %s", e)
+            if attempt:
+                raise RoadsUnavailable("Road directions are not available right now.") from e
     try:
         if data.get("code") != "Ok":
             raise RoadsUnavailable("No road route was found between those places.")
         r = data["routes"][0]
-        path = _thin([[round(lat, 5), round(lng, 5)] for lng, lat in r["geometry"]["coordinates"]])
-        legs = [{"duration_min": round(float(l["duration"]) / 60, 1), "distance_km": round(float(l["distance"]) / 1000, 2)}
+        geometry = r["geometry"]
+        coords = geometry["coordinates"]
+        if geometry["type"] != "LineString" or not isinstance(coords, list) or not 2 <= len(coords) <= MAX_PATH_POINTS:
+            raise ValueError("Invalid road geometry")
+        # Keep every bend. Sampling every Nth vertex cuts across corners and off roads.
+        path = []
+        for lng, lat in coords:
+            if abs(_number(lat)) > 90 or abs(_number(lng)) > 180:
+                raise ValueError("Road coordinate out of range")
+            path.append([lat, lng])
+        legs = [{"duration_min": _measure(l["duration"], 60, 1), "distance_km": _measure(l["distance"], 1000, 2)}
                 for l in r.get("legs", [])]
-        result = {"path": path, "duration_min": round(float(r["duration"]) / 60, 1),
-                  "distance_km": round(float(r["distance"]) / 1000, 2), "legs": legs,
+        result = {"path": path, "duration_min": _measure(r["duration"], 60, 1),
+                  "distance_km": _measure(r["distance"], 1000, 2), "legs": legs,
                   "source": "OpenStreetMap roads via OSRM, no live traffic"}
     except RoadsUnavailable:
         raise
-    except (KeyError, IndexError, TypeError, ValueError) as e:
+    except (AttributeError, KeyError, IndexError, TypeError, ValueError) as e:
         log.warning("unexpected road routing answer: %s", e)
         raise RoadsUnavailable("Road directions are not available right now.")
-    if len(path) < 2:
-        raise RoadsUnavailable("No road route was found between those places.")
-
     _cache[key] = (now, result)
-    while len(_cache) > CACHE_MAX:
+    while len(_cache) > CACHE_MAX or sum(len(v[1]["path"]) for v in _cache.values()) > CACHE_MAX_VERTICES:
         _cache.popitem(last=False)
     return result

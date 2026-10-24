@@ -49,6 +49,11 @@ class HandlerTests(unittest.TestCase):
             self.assertEqual(status, 200, path)
             self.assertIn(ctype, headers["Content-Type"], path)
 
+    def test_unversioned_app_assets_are_revalidated(self):
+        for path in ('/static/app.js', '/static/styles.css'):
+            _, headers, _ = call('GET', path)
+            self.assertEqual(headers['Cache-Control'], 'no-cache')
+
     def test_map_tiles_are_allowed_and_get_a_referer(self):
         # OpenStreetMap blocks tile requests with no Referer, which leaves the map blank.
         _, headers, _ = call("GET", "/")

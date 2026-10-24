@@ -25,7 +25,7 @@
       text: "A storm took out our power three days ago. We need D batteries for our lantern and propane for the camp stove." },
   ];
 
-  const state = { meta: null, loc: null, radius: 8, traces: [], last: null, running: false };
+  const state = { meta: null, customLocations: {}, radius: 8, traces: [], last: null, running: false };
 
   // ------------------------------------------------------------- utilities
   function pacificMinutes() {
@@ -66,44 +66,63 @@
     toast._t = setTimeout(() => t.classList.remove('show'), 2600);
   }
 
-  async function post(path, body) {
-    let res;
+  async function fetchJson(path, options, timeout = 35000) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
     try {
-      res = await fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      const res = await fetch(path, { ...options, signal: controller.signal });
+      let data = {};
+      try { data = await res.json(); }
+      catch (e) { if (e.name === 'AbortError') throw e; /* non-JSON error body */ }
+      return { res, data };
+    } finally { clearTimeout(timer); }
+  }
+
+  async function post(path, body) {
+    let res, data;
+    try {
+      ({ res, data } = await fetchJson(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }));
     } catch (e) {
-      const err = new Error(navigator.onLine ? 'Could not reach the server. Check your connection and try again.' : 'You are offline.');
-      err.offline = true;
+      const err = new Error(e.name === 'AbortError' ? 'The request timed out. Please try again.'
+        : navigator.onLine ? 'Could not reach the server. Check your connection and try again.' : 'You are offline.');
+      err.offline = e.name !== 'AbortError';
       throw err;
     }
-    let data = {};
-    try { data = await res.json(); } catch (e) { /* non-JSON error body */ }
     if (!res.ok) { const err = new Error(data.error || `Request failed (${res.status})`); err.data = data; throw err; }
     return data;
   }
 
   // -------------------------------------------------------------- location
   function currentLoc() {
-    if (state.loc) return state.loc;
     const sel = $('#place');
+    if (state.customLocations[sel.value]) return state.customLocations[sel.value];
     const p = state.meta && state.meta.places.find((x) => x.id === sel.value);
     return p ? { lat: p.lat, lng: p.lng, label: p.label } : null;
   }
 
   function setupPlaces(places) {
     const sel = $('#place');
+    const selected = sel.value;
     sel.innerHTML = places.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
-    sel.addEventListener('change', () => { state.loc = null; showOrigin(); });
+    Object.entries(state.customLocations).forEach(([id, loc]) => addLocation(id, loc));
+    if ([...sel.options].some((o) => o.value === selected)) sel.value = selected;
     showOrigin();
   }
+
+  function addLocation(id, loc) {
+    state.customLocations[id] = loc;
+    let opt = [...$('#place').options].find((o) => o.value === id);
+    if (!opt) { opt = document.createElement('option'); opt.value = id; $('#place').prepend(opt); }
+    opt.textContent = loc.label;
+  }
+  $('#place').addEventListener('change', showOrigin);
 
   $('#locate').addEventListener('click', () => {
     const hint = $('#locHint');
     if (!navigator.geolocation) { hint.textContent = 'Your browser cannot share its location. Pick a neighborhood instead.'; return; }
     hint.textContent = 'Finding you...';
     navigator.geolocation.getCurrentPosition((pos) => {
-      state.loc = { lat: pos.coords.latitude, lng: pos.coords.longitude, label: 'Your location' };
-      let opt = $('#place option[value="__me"]');
-      if (!opt) { opt = document.createElement('option'); opt.value = '__me'; opt.textContent = 'Your location'; $('#place').prepend(opt); }
+      addLocation('__me', { lat: pos.coords.latitude, lng: pos.coords.longitude, label: 'Your location' });
       $('#place').value = '__me';
       hint.textContent = 'Using your location. The demo stores are around San Jose, so far-away results will be empty.';
       showOrigin();
@@ -111,7 +130,7 @@
   });
 
   // ------------------------------------------------------------------- map
-  const mapState = { map: null, layer: null, straight: null, token: 0 };
+  const mapState = { map: null, layer: null, straight: null, token: 0, plan: null, line: null, loading: false, bounds: null, maxZoom: 14 };
 
   function ensureMap() {
     const el = $('#map');
@@ -145,17 +164,29 @@
   function placeMap() {
     const aside = $('.col-map'), slot = $('#mapSlot');
     if (!wide.matches && slot) { if (aside.parentNode !== slot) slot.appendChild(aside); } else rescueMap();
-    if (mapState.map) setTimeout(() => mapState.map.invalidateSize(), 60);
+    if (mapState.map) setTimeout(fitMap, 60);
   }
   wide.addEventListener('change', placeMap);
+  window.addEventListener('resize', () => requestAnimationFrame(fitMap));
+
+  function fitMap() {
+    if (!mapState.map) return;
+    mapState.map.invalidateSize({ pan: false });
+    if (mapState.bounds) mapState.map.fitBounds(mapState.bounds, { padding: [40, 40], maxZoom: mapState.maxZoom, animate: false });
+  }
 
   const pin = (cls, html, size) => L.divIcon({ className: `pin ${cls}`, html, iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
 
   function showOrigin() {
+    // Form edits describe the next search; the map still belongs to the displayed plan.
+    if (mapState.plan) return;
     const loc = currentLoc();
     const map = ensureMap();
     if (!map || !loc) return;
     mapState.token++;                               // a road route still loading belongs to the old view
+    mapState.bounds = null;
+    $('#mapLink').hidden = true;
+    $('#mapNote').textContent = 'Pick where you are and your route appears here.';
     mapState.layer.clearLayers();
     L.marker([loc.lat, loc.lng], { icon: pin('pin-you', '', 20), keyboard: false }).addTo(mapState.layer);
     L.circle([loc.lat, loc.lng], { radius: +$('#radius').value * 1000, color: '#0a4da2', weight: 2, dashArray: '6 6', fillOpacity: 0.04 }).addTo(mapState.layer);
@@ -174,26 +205,37 @@
 
   // The fastest road route through the stops, in the order the plan chose. The straight dashed
   // line is already on the map, so the map is useful at once and still works if this fails.
+  function validRoad(road) {
+    return road && Array.isArray(road.path) && road.path.length >= 2 && road.path.every((p) =>
+      Array.isArray(p) && p.length === 2 && p.every(Number.isFinite) && Math.abs(p[0]) <= 90 && Math.abs(p[1]) <= 180)
+      && Number.isFinite(road.duration_min) && road.duration_min >= 0
+      && Number.isFinite(road.distance_km) && road.distance_km >= 0;
+  }
+
   async function loadRoad(plan, line, cached) {
     const token = mapState.token;
-    let road = cached || null, offline = false;
+    mapState.loading = true;
+    $('#mapNote').textContent = 'Finding the fastest road route...';
+    let road = validRoad(cached) ? cached : null, offline = false;
     if (!road) {
       try {
         const r = await post('/api/route', { points: line.map(([lat, lng]) => ({ lat, lng })) });
-        road = r.available ? r : null;
+        road = r.available && validRoad(r) ? r : null;
       } catch (e) { offline = !!e.offline; }
     }
     if (token !== mapState.token || !mapState.map) return;     // a newer search replaced this plan
+    mapState.loading = false;
     const note = $('#mapNote');
     if (!road) {
-      note.textContent = `${offline ? 'You are offline' : 'Road directions are unavailable right now'}, so the dashed line is straight. The Directions buttons still work.`;
+      note.innerHTML = `${offline ? 'You are offline' : 'Road directions are unavailable right now'}. The dashed line only connects stops; it is not a driving route. Use Directions or <button type="button" class="btn-small" data-action="retry-road">Retry road route</button>.`;
       return;
     }
+    L.polyline(road.path, { color: '#ffffff', weight: 10, opacity: 0.9, lineJoin: 'round', smoothFactor: 0 }).addTo(mapState.layer);
+    const drawn = L.polyline(road.path, { color: '#0a4da2', weight: 5, opacity: 0.95, lineJoin: 'round', smoothFactor: 0 }).addTo(mapState.layer);
     if (mapState.straight) mapState.layer.removeLayer(mapState.straight);
-    L.polyline(road.path, { color: '#ffffff', weight: 10, opacity: 0.9, lineJoin: 'round' }).addTo(mapState.layer);   // casing, so the route reads on any map colour
-    const drawn = L.polyline(road.path, { color: '#0a4da2', weight: 5, opacity: 0.95, lineJoin: 'round' }).addTo(mapState.layer);
-    mapState.map.invalidateSize();
-    mapState.map.fitBounds(drawn.getBounds(), { padding: [40, 40], maxZoom: 15 });
+    mapState.bounds = drawn.getBounds().extend(L.latLngBounds(line));
+    mapState.maxZoom = 15;
+    fitMap();
     note.textContent = `Fastest road route: about ${Math.max(1, Math.round(road.duration_min))} min, ${fmtMi(road.distance_km)} (OpenStreetMap roads, no live traffic). Small circles are other stores with stock.`;
     if (!cached && state.last && state.last.result && state.last.result.plan === plan) {
       state.last.road = road;                                  // keep it so a saved plan shows the road route offline
@@ -206,6 +248,7 @@
     const loc = plan.location;
     if (!map) return;
     mapState.token++;
+    mapState.plan = plan;
     mapState.layer.clearLayers();
     const bounds = [[loc.lat, loc.lng]];
     L.circle([loc.lat, loc.lng], { radius: loc.radius_km * 1000, color: '#0a4da2', weight: 2, dashArray: '6 6', fillOpacity: 0.04 }).addTo(mapState.layer);
@@ -217,6 +260,7 @@
       L.marker([s.lat, s.lng], { icon: pin('pin-alt', '', 12), title: s.name, keyboard: false }).addTo(mapState.layer);
     }));
     const line = [[loc.lat, loc.lng]];
+    mapState.line = line;
     plan.route.stops.forEach((s) => {
       line.push([s.store.lat, s.store.lng]);
       bounds.push([s.store.lat, s.store.lng]);
@@ -226,8 +270,10 @@
     mapState.straight = line.length > 1
       ? L.polyline(line, { color: '#0a4da2', weight: 4, opacity: 0.8, dashArray: '8 8' }).addTo(mapState.layer) : null;
     L.marker([loc.lat, loc.lng], { icon: pin('pin-you', '', 20), keyboard: false }).addTo(mapState.layer);
-    map.invalidateSize();
-    if (bounds.length > 1) map.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 }); else map.setView([loc.lat, loc.lng], 12);
+    mapState.bounds = bounds.length > 1 ? L.latLngBounds(bounds) : null;
+    mapState.maxZoom = 14;
+    fitMap();
+    if (bounds.length === 1) map.setView([loc.lat, loc.lng], 12);
     const link = $('#mapLink');
     if (plan.route.stops.length) {
       link.href = googleRouteUrl(plan);
@@ -440,6 +486,11 @@
   }
 
   function clearResults() {
+    mapState.token++;
+    mapState.plan = null;
+    mapState.line = null;
+    mapState.loading = false;
+    showOrigin();
     rescueMap();
     ['r-safety', 'r-plan', 'r-alts', 'r-items', 'r-understood', 'r-actions', 'r-followup', 'r-trace'].forEach((id) => { $('#' + id).innerHTML = ''; });
     $('#notice').hidden = true;
@@ -453,9 +504,22 @@
     const err = $('#formError');
     err.hidden = true;
     if (text.length < 3) { err.textContent = 'Tell us a little about what you need.'; err.hidden = false; $('#text').focus(); return; }
-    const loc = currentLoc();
-    if (!loc) { err.textContent = 'Pick where you are first.'; err.hidden = false; return; }
     state.running = true;
+    $('#go').disabled = true;
+    $('#go').textContent = 'Loading locations...';
+    try {
+      if (!currentLoc()) await loadMeta();
+    } catch (e) {
+      err.textContent = 'Could not load locations. Check your connection and press Enter to try again.';
+      err.hidden = false;
+    }
+    const loc = currentLoc();
+    if (!loc) {
+      state.running = false;
+      $('#go').disabled = false;
+      $('#go').textContent = 'Find supplies';
+      return;
+    }
     state.radius = +$('#radius').value;
     state.originLabel = loc.label;
     state.traces = [];
@@ -519,6 +583,7 @@
   }
 
   function openSaved() {
+    if (state.running) return;
     const saved = safeStore.get(SAVE_KEY);
     if (!saved) return;
     clearResults();
@@ -526,6 +591,11 @@
     state.originLabel = saved.origin;
     state.traces = saved.traces || [];
     state.last = saved;
+    const loc = saved.result.plan.location;
+    addLocation('__saved', { lat: loc.lat, lng: loc.lng, label: saved.origin || 'Saved location' });
+    $('#place').value = '__saved';
+    $('#radius').value = String(saved.radius);
+    $('#progress').hidden = true;
     $('#text').value = saved.text || '';
     $('#results').hidden = false;
     renderSafety(saved.intent);
@@ -553,15 +623,25 @@
 
   // Enter searches; Shift+Enter makes a new line. Do not fire while an input method (Japanese,
   // Chinese, Korean...) is still choosing characters, because Enter confirms those.
+  let shiftEnter = false;
   $('#text').addEventListener('keydown', (e) => {
+    shiftEnter = e.key === 'Enter' && e.shiftKey;
     if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); run(); }
+  });
+  // Chrome on Android can send only beforeinput for the virtual search/Enter key.
+  $('#text').addEventListener('keyup', () => { shiftEnter = false; });
+  $('#text').addEventListener('blur', () => { shiftEnter = false; });
+  $('#text').addEventListener('beforeinput', (e) => {
+    if ((e.inputType === 'insertLineBreak' || e.inputType === 'insertParagraph') && !e.isComposing && !shiftEnter) {
+      e.preventDefault(); run();
+    }
   });
 
   $$('[data-example]').forEach((b) => b.addEventListener('click', () => {
     const ex = EXAMPLES[+b.dataset.example];
     $('#text').value = ex.text;
-    const p = state.meta.places.find((x) => x.label.startsWith(ex.place));
-    if (p) { state.loc = null; $('#place').value = p.id; }
+    const p = state.meta && state.meta.places.find((x) => x.label.startsWith(ex.place));
+    if (p) $('#place').value = p.id;
     $('#radius').value = ex.radius;
     showOrigin();
     $('#text').focus();
@@ -586,6 +666,7 @@
     }
     const act = t.dataset.action;
     if (act === 'retry') run();
+    else if (act === 'retry-road' && mapState.plan && !mapState.loading) loadRoad(mapState.plan, mapState.line);
     else if (act === 'open-saved') openSaved();
     else if (act === 'print') window.print();
     else if (act === 'wider') {
@@ -626,18 +707,31 @@
   window.addEventListener('online', () => { if (!state.running) $('#notice').hidden = true; });
 
   // ------------------------------------------------------------------ boot
+  let metaRequest = null;
+  function loadMeta() {
+    if (state.meta) return Promise.resolve(state.meta);
+    if (!metaRequest) {
+      metaRequest = (async () => {
+        const { res, data: meta } = await fetchJson('/api/meta', { cache: 'no-store' }, 12000);
+        if (!res.ok) throw new Error('Could not load locations.');
+        if (!Array.isArray(meta.places) || !meta.places.length) throw new Error('No locations available.');
+        state.meta = meta;
+        setupPlaces(meta.places);
+        if (meta.data && meta.data.demo) $('#dataBadge').title = meta.data.note;
+        return meta;
+      })().finally(() => { metaRequest = null; });
+    }
+    return metaRequest;
+  }
   (async function boot() {
     try {
-      const res = await fetch('/api/meta');
-      state.meta = await res.json();
-      setupPlaces(state.meta.places);
-      if (state.meta.data && state.meta.data.demo) $('#dataBadge').title = state.meta.data.note;
+      await loadMeta();
     } catch (e) {
       showNotice('Could not load the app data. Check your connection.', 'bad');
       showSavedPrompt();
       return;
     }
     showSavedPrompt();
-    if ('serviceWorker' in navigator) { try { navigator.serviceWorker.register('/sw.js'); } catch (e) { /* optional */ } }
+    if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => { /* optional */ });
   })();
 })();
