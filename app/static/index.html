@@ -11,18 +11,17 @@
 <link rel="stylesheet" href="/static/vendor/leaflet.css">
 <link rel="stylesheet" href="/static/styles.css?v=10">
 <link rel="stylesheet" href="/static/haven.css?v=10">
-<link rel="stylesheet" href="/static/haven-port.css?v=10">
-<link rel="stylesheet" href="/static/haven-home.css?v=1">
+<link rel="stylesheet" href="/static/haven-port.css?v=11">
+<link rel="stylesheet" href="/static/haven-home.css?v=2">
 </head>
 <body class="app-shell">
 <a class="skip" href="#text">Skip to the request form</a>
 
 <header class="bar site-header">
   <a class="brand" href="/" aria-label="Haven home"><svg width="30" height="30" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m24 2 6 16 16 6-16 6-6 16-6-16L2 24l16-6L24 2Z" fill="currentColor"/><circle cx="24" cy="24" r="4.1" fill="var(--paper)"/></svg><span>haven<span class="brand-period">.</span></span></a>
-  <nav aria-label="Main navigation"><button type="button" class="nav-link active" data-action="new-request"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>Find supplies</button><button type="button" class="nav-link" data-action="saved-list"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4Z"/></svg>My supply lists<span id="savedCount" class="nav-count" hidden></span></button><button type="button" class="nav-link" data-action="how">How it works</button></nav>
-  <div class="header-right"><button type="button" class="badge demo-badge" id="dataBadge" data-action="settings"><span class="amber-dot" aria-hidden="true"></span>Demo workspace <span aria-hidden="true">⌄</span></button><button type="button" class="avatar" data-action="settings" aria-label="Workspace settings">M</button></div>
+  <nav aria-label="Main navigation"><button type="button" class="nav-link active" data-action="new-request"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>Find supplies</button><button type="button" class="nav-link" data-action="saved-list"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4Z"/></svg>My supply lists<span id="savedCount" class="nav-count" hidden></span></button></nav>
+  <div class="header-right"><button type="button" class="badge demo-badge" id="dataBadge" data-action="settings"><span class="amber-dot" aria-hidden="true"></span>Demo workspace <span aria-hidden="true">⌄</span></button><button type="button" class="avatar" data-action="settings" aria-label="Workspace settings">M</button><button type="button" class="help-button" data-action="how" aria-label="Help" title="Help" aria-haspopup="dialog" aria-controls="howDialog"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9a2.4 2.4 0 0 1 4.8 0c0 1.6-2.4 1.8-2.4 3.5"/><path d="M12 16h.01"/></svg></button></div>
 </header>
-<div class="sos" role="note"><div class="sos-inner">In danger or a medical emergency? <strong>Call 911 first.</strong></div></div>
 <main class="shell home">
   <div class="col-main plan-panel">
     <section class="hero" id="hero" aria-labelledby="h1"><div class="hero-copy"><h1 id="h1">Find supplies<br>near you.</h1></div><div class="hero-art" aria-hidden="true"><div class="art-orbit one"></div><div class="art-orbit two"></div><div class="hero-map"><svg class="map-drawing" viewBox="0 0 800 700" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><defs><pattern id="blocks-h" x="-20" y="-20" width="104" height="86" patternTransform="rotate(-24 400 350)" patternUnits="userSpaceOnUse"><rect width="104" height="86" fill="#f1eee7"/><rect x="9" y="9" width="86" height="68" rx="5" fill="#e9e5dc"/><path d="M0 0H104M0 0V86" stroke="#fffdf9" stroke-width="9"/></pattern></defs><rect width="800" height="700" fill="url(#blocks-h)"/><path d="M-70 100C100 130 170 240 140 340S230 500 150 760" fill="none" stroke="#d7e8e4" stroke-width="62"/><path d="M-70 100C100 130 170 240 140 340S230 500 150 760" fill="none" stroke="#c4dbd7" stroke-width="2"/><path d="m150 95 130-30 42 96-121 44Z M500 505l120-50 55 108-113 43Z M555 90l125-53 39 90-120 50Z" fill="#dce4d0"/><path d="M-20 490 810 100M200-20 605 730" stroke="#e5ddcd" stroke-width="18"/><path d="M-20 490 810 100M200-20 605 730" stroke="#fffdf8" stroke-width="12"/><path d="M-30 599 785 215" stroke="#fffdfa" stroke-width="12"/><path d="M-40 360 760-20" stroke="#fffdfa" stroke-width="12"/><path d="m240 490 75-96 157-52 74-110" fill="none" stroke="#8d4559" stroke-width="4" stroke-dasharray="6 9" stroke-linecap="round" opacity=".65"/></svg><div class="art-map-pin b"><svg width="17" height="17" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m24 2 6 16 16 6-16 6-6 16-6-16L2 24l16-6L24 2Z" fill="currentColor"/><circle cx="24" cy="24" r="4.1" fill="var(--paper)"/></svg></div><div class="art-map-pin c"><svg width="17" height="17" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m24 2 6 16 16 6-16 6-6 16-6-16L2 24l16-6L24 2Z" fill="currentColor"/><circle cx="24" cy="24" r="4.1" fill="var(--paper)"/></svg></div><div class="art-you"></div></div><div class="hero-click-ring"></div><div class="art-map-pin a hero-target"><svg width="26" height="26" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m24 2 6 16 16 6-16 6-6 16-6-16L2 24l16-6L24 2Z" fill="currentColor"/><circle cx="24" cy="24" r="4.1" fill="var(--paper)"/></svg></div><div class="hero-stock-preview"><div class="hero-stock-heading"><span>Parkside Market</span><small>Sample</small></div><div class="hero-stock-row"><span>Water</span><b>36 gal</b></div><div class="hero-stock-row"><span>Food</span><b>72 servings</b></div><div class="hero-stock-row"><span>Hygiene</span><b>28 kits</b></div></div><svg class="hero-demo-cursor" viewBox="0 0 30 36" fill="none"><path d="M3 2v24l6-6 6 12 5-2-6-12 10-1L3 2Z" fill="#542739" stroke="#fffefa" stroke-width="2.1" stroke-linejoin="round"/></svg></div></section>
@@ -62,6 +61,7 @@
         </div>
         <p class="enter-hint" id="enterHint">Enter to search · Shift+Enter for a new line</p>
       </form>
+      <p class="home-emergency-note" role="note">In danger or a medical emergency? Call 911 first.</p>
     </section>
 
     <section class="progress" id="progress" aria-label="Progress" hidden>
@@ -114,6 +114,6 @@
 
 <script src="/static/vendor/leaflet.js"></script>
 <script src="/static/maps.js?v=10"></script>
-<script src="/static/app.js?v=10"></script>
+<script src="/static/app.js?v=15"></script>
 </body>
 </html>

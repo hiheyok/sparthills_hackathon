@@ -183,3 +183,7 @@ body:not(.has-results) .shell.home > .col-map { display: block; }
 .shell .plan-panel, .shell .map-panel { animation: none; transform: none; }
 .has-results .try.prompt-suggestions { display: none; }
 .map-panel:has(.stock-popup) .map-heading { display: none; }
+
+/* Help stays at the right edge of the navbar on every screen size. */
+.header-right .help-button { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; width: 34px; height: 34px; padding: 0; border-radius: 50%; color: var(--maroon); }
+.header-right .help-button:hover { background: #eee4e3; }

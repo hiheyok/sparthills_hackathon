@@ -378,11 +378,11 @@
   }
 
   function renderByItem(results, open) {
-    $('#r-items').innerHTML = `<details ${open ? 'open' : ''}><summary>All supplies</summary>` + results.map((r) => {
+    $('#r-items').innerHTML = `<details ${open ? 'open' : ''}><summary>Nearby store options</summary>` + results.map((r) => {
       const chip = r.status === 'found' ? ['In stock nearby', 'ok'] : r.status === 'partial' ? ['Limited stock', 'warn'] : ['Not available nearby', 'bad'];
       return `<div class="item-block"><div class="item-head"><h4>${esc(r.label)}${r.qty > 1 ? ` x${r.qty}` : ''}</h4>
         <span class="chip ${chip[1]}">${chip[0]}</span>${r.inferred ? '<span class="tag ai" title="You did not say this, but the plan needs it">Inferred</span>' : ''}</div>
-        ${r.status === 'gap' ? `<p class="gap-text">${esc(gapText(r))}</p>` : r.stores.slice(0, 3).map(storeLine).join('')}</div>`;
+        ${r.status === 'gap' ? `<p class="gap-text">${esc(gapText(r))}</p>` : r.stores.map(storeLine).join('')}</div>`;
     }).join('') + '</details>';
   }
 
@@ -599,7 +599,7 @@
       state.last = { savedAt: Date.now(), result: b, intent: u.intent, traces: state.traces, text, radius: state.radius, origin: loc.label, categories: Object.fromEntries((state.meta?.catalog || []).map((item) => [item.id, item.category])) };
       renderPlan(b, true);
       renderAlternatives(b.plan.alternatives);
-      renderByItem(b.plan.results, false);
+      renderByItem(b.plan.results, true);
       renderActions();
       renderTrace();
       drawRoute(b.plan);
@@ -638,7 +638,7 @@
     renderUnderstood(saved.intent);
     renderPlan(saved.result, false);
     renderAlternatives(saved.result.plan.alternatives);
-    renderByItem(saved.result.plan.results, false);
+    renderByItem(saved.result.plan.results, true);
     renderActions();
     renderTrace();
     drawRoute(saved.result.plan, saved.road);
