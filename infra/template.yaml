@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  SupplyLine. A Lambda function behind an API Gateway HTTP API serves the web app and
+  the JSON API. Amazon Bedrock does the language work. DynamoDB holds short-lived
+  community stock reports.
+
+Parameters:
+  CodeBucket:
+    Type: String
+    Description: S3 bucket that holds the Lambda zip (scripts/deploy.sh creates it).
+  CodeKey:
+    Type: String
+    Description: S3 key of the Lambda zip.
+  BedrockRegion:
+    Type: String
+    Default: us-east-1
+    Description: Region used for Bedrock calls.
+  BedrockModelIds:
+    Type: String
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0,us.amazon.nova-2-lite-v1:0,amazon.nova-2-lite-v1:0,amazon.nova-lite-v1:0
+    Description: >-
+      Comma-separated model or inference-profile IDs, tried in order. If one is not
+      enabled for the account or blocked by policy, the next is used automatically.
+  GuardrailId:
+    Type: String
+    Default: ''
+    Description: Optional Amazon Bedrock Guardrail ID applied to every model call.
+  GuardrailVersion:
+    Type: String
+    Default: DRAFT
+  ThrottleRatePerSecond:
+    Type: Number
+    Default: 25
+    Description: Steady-state requests per second allowed through the API (protects Bedrock spend).
+  ThrottleBurst:
+    Type: Number
+    Default: 50
+
+Conditions:
+  HasGuardrail: !Not [!Equals [!Ref GuardrailId, '']]
+
+Resources:
+  ReportsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: store_id
+          AttributeType: S
+        - AttributeName: item_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: store_id
+          KeyType: HASH
+        - AttributeName: item_id
+          KeyType: RANGE
+      TimeToLiveSpecification:
+        AttributeName: ttl
+        Enabled: true
+      SSESpecification:
+        SSEEnabled: true
+
+  FunctionLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/aws/lambda/${AWS::StackName}-api'
+      RetentionInDays: 14
+
+  FunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub 'arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
+      Policies:
+        - PolicyName: BedrockInvoke
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource:
+                  # Cross-region inference profiles route to foundation models in other
+                  # Regions, so the model ARN Region is a wildcard.
+                  - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/*'
+                  - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*'
+        - PolicyName: ReportsTable
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:Scan
+                Resource: !GetAtt ReportsTable.Arn
+
+  ApiFunction:
+    Type: AWS::Lambda::Function
+    DependsOn: FunctionLogs
+    Properties:
+      FunctionName: !Sub '${AWS::StackName}-api'
+      Description: SupplyLine web app and API
+      Runtime: python3.12
+      Architectures: [arm64]
+      Handler: handler.handler
+      MemorySize: 512
+      Timeout: 29
+      Role: !GetAtt FunctionRole.Arn
+      Code:
+        S3Bucket: !Ref CodeBucket
+        S3Key: !Ref CodeKey
+      Environment:
+        Variables:
+          AI_MODE: auto
+          BEDROCK_REGION: !Ref BedrockRegion
+          BEDROCK_MODEL_IDS: !Ref BedrockModelIds
+          REPORTS_TABLE: !Ref ReportsTable
+          GUARDRAIL_ID: !If [HasGuardrail, !Ref GuardrailId, '']
+          GUARDRAIL_VERSION: !Ref GuardrailVersion
+
+  HttpApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub '${AWS::StackName}-http'
+      ProtocolType: HTTP
+
+  ApiIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref HttpApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !GetAtt ApiFunction.Arn
+      PayloadFormatVersion: '2.0'
+      TimeoutInMillis: 30000
+
+  ApiRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref HttpApi
+      RouteKey: $default
+      Target: !Sub 'integrations/${ApiIntegration}'
+
+  ApiStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref HttpApi
+      StageName: $default
+      AutoDeploy: true
+      DefaultRouteSettings:
+        ThrottlingRateLimit: !Ref ThrottleRatePerSecond
+        ThrottlingBurstLimit: !Ref ThrottleBurst
+
+  ApiInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref ApiFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*'
+
+Outputs:
+  AppUrl:
+    Description: Open this in a browser.
+    Value: !GetAtt HttpApi.ApiEndpoint
+  FunctionName:
+    Value: !Ref ApiFunction
+  ReportsTableName:
+    Value: !Ref ReportsTable

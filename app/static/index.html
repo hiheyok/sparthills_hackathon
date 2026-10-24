@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SupplyLine: find supplies in a disaster</title>
+<meta name="description" content="Describe what you need in a disaster. SupplyLine finds the nearest open stores with stock, and a safe alternative when nobody has it.">
+<meta name="theme-color" content="#0a4da2">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/static/icon.svg" type="image/svg+xml">
+<link rel="preload" href="/static/fonts/overpass-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/vendor/leaflet.css">
+<link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+<a class="skip" href="#text">Skip to the request form</a>
+
+<header class="bar">
+  <a class="brand" href="/"><img src="/static/icon.svg" width="30" height="30" alt="">SupplyLine</a>
+  <span class="badge" id="dataBadge">Demo data</span>
+</header>
+<div class="sos" role="note">
+  <div class="sos-inner"><strong>In danger or a medical emergency? Call 911 first.</strong> Supplies can wait.</div>
+</div>
+
+<main class="shell">
+  <div class="col-main">
+
+    <section class="ask" aria-labelledby="h1">
+      <h1 id="h1">Tell us what happened and what you need.</h1>
+      <p class="sub">We find open stores near you that have it, or something that does the same job.</p>
+
+      <form id="form" novalidate>
+        <label for="text" class="sr">What is happening, and what do you need?</label>
+        <textarea id="text" name="text" rows="3" maxlength="1500" autocomplete="off" enterkeyhint="search" aria-describedby="enterHint"
+          placeholder="Example: Wildfire warning and the power is out. My dad uses insulin and it has to stay cold. We also have a baby who needs formula and diapers."></textarea>
+        <p class="form-error" id="formError" role="alert" hidden></p>
+
+        <div class="try" role="group" aria-label="Example requests">
+          <span class="try-label">Try:</span>
+          <button type="button" class="chip-btn" data-example="0">Wildfire, insulin, baby</button>
+          <button type="button" class="chip-btn" data-example="1">Earthquake, no water</button>
+          <button type="button" class="chip-btn" data-example="2">Storm outage</button>
+          <span class="enter-hint" id="enterHint">Press Enter to search. Shift+Enter adds a new line.</span>
+        </div>
+
+        <div class="where">
+          <div class="field f-place">
+            <label for="place">Where are you</label>
+            <select id="place" name="place"></select>
+          </div>
+          <div class="field f-radius">
+            <label for="radius">Search within</label>
+            <select id="radius" name="radius">
+              <option value="3">2 miles</option>
+              <option value="8" selected>5 miles</option>
+              <option value="16">10 miles</option>
+              <option value="32">20 miles</option>
+            </select>
+          </div>
+          <button type="button" class="btn-quiet" id="locate">Use my location</button>
+          <button type="submit" class="btn" id="go">Find supplies</button>
+        </div>
+        <p class="hint" id="locHint" aria-live="polite"></p>
+      </form>
+    </section>
+
+    <section class="progress" id="progress" aria-label="Progress" hidden>
+      <ol class="steps">
+        <li data-step="understand"><span class="dot" aria-hidden="true"></span><div><b>Read your request</b><span class="meta" data-meta>Amazon Bedrock</span></div></li>
+        <li data-step="search"><span class="dot" aria-hidden="true"></span><div><b>Check nearby stores</b><span class="meta" data-meta>Stock, hours, distance</span></div></li>
+        <li data-step="alternatives"><span class="dot" aria-hidden="true"></span><div><b>Find alternatives</b><span class="meta" data-meta>Amazon Bedrock</span></div></li>
+        <li data-step="brief"><span class="dot" aria-hidden="true"></span><div><b>Build your plan</b><span class="meta" data-meta>Amazon Bedrock</span></div></li>
+      </ol>
+    </section>
+
+    <div id="notice" class="notice" role="status" hidden></div>
+
+    <div id="results" hidden>
+      <section id="r-safety" aria-live="assertive"></section>
+      <section id="r-plan" class="plan" aria-labelledby="planTitle"></section>
+      <section id="r-actions" class="actions"></section>
+      <section id="r-alts" class="alts"></section>
+      <section id="r-items" class="items"></section>
+      <section id="r-understood" class="understood"></section>
+      <section id="r-followup" class="followup"></section>
+      <section id="r-trace" class="trace"></section>
+    </div>
+
+    <section id="saved" class="saved" hidden></section>
+  </div>
+
+  <aside class="col-map" aria-label="Map">
+    <div id="map" role="img" aria-label="Map of your route"></div>
+    <p class="map-note" id="mapNote" aria-live="polite">Pick where you are and your route appears here.</p>
+    <a class="btn-small map-link" id="mapLink" target="_blank" rel="noopener" hidden>Turn-by-turn in Google Maps</a>
+    <p class="map-note map-warn" id="mapWarn" role="status" hidden>The map background could not load (you may be offline). Your stops and route are still shown here and in the list.</p>
+  </aside>
+</main>
+
+<footer class="foot">
+  <p>SupplyLine is a hackathon prototype. Store names, locations and stock levels are fictional demo data, and drive times are estimates, not live traffic. This is not medical advice. In an emergency, call 911. For local help, dial 211.</p>
+</footer>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+<noscript><p class="noscript">SupplyLine needs JavaScript. In an emergency call 911. For local help dial 211.</p></noscript>
+
+<script src="/static/vendor/leaflet.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

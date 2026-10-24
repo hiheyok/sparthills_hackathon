@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 760" font-family="'Overpass','Segoe UI',Helvetica,Arial,sans-serif">
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#0d1b2a"/>
+    </marker>
+    <marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10z" fill="#0a4da2"/>
+    </marker>
+  </defs>
+  <rect width="1280" height="760" fill="#eef2f6"/>
+
+  <text x="40" y="52" font-size="30" font-weight="800" fill="#0d1b2a">SupplyLine architecture</text>
+  <text x="40" y="78" font-size="16" fill="#44546a">Plain code finds and routes. Amazon Bedrock understands, judges substitutes and explains.</text>
+
+  <!-- client -->
+  <rect x="40" y="130" width="250" height="240" rx="10" fill="#fff" stroke="#0d1b2a" stroke-width="2"/>
+  <text x="60" y="162" font-size="17" font-weight="800" fill="#0d1b2a">Browser, installable app</text>
+  <text x="60" y="190" font-size="15" fill="#0d1b2a">Request box, examples</text>
+  <text x="60" y="212" font-size="15" fill="#0d1b2a">Route diagram and map</text>
+  <text x="60" y="234" font-size="15" fill="#0d1b2a">Calls the four stages in order</text>
+  <text x="60" y="256" font-size="15" fill="#0d1b2a">and shows real progress</text>
+  <rect x="60" y="282" width="210" height="64" rx="6" fill="#e3edfa" stroke="#0a4da2" stroke-width="1.5"/>
+  <text x="72" y="306" font-size="14" font-weight="700" fill="#0a4da2">Works with no signal</text>
+  <text x="72" y="326" font-size="13" fill="#0d1b2a">Service worker, last plan</text>
+  <text x="72" y="342" font-size="13" fill="#0d1b2a">saved on the device</text>
+
+  <!-- AWS boundary -->
+  <rect x="340" y="104" width="620" height="590" rx="14" fill="none" stroke="#44546a" stroke-width="2" stroke-dasharray="9 7"/>
+  <text x="360" y="130" font-size="16" font-weight="700" fill="#44546a">AWS account, us-east-1</text>
+
+  <rect x="360" y="148" width="200" height="66" rx="8" fill="#fff" stroke="#0d1b2a" stroke-width="2"/>
+  <text x="378" y="176" font-size="17" font-weight="800" fill="#0d1b2a">API Gateway</text>
+  <text x="378" y="198" font-size="14" fill="#44546a">HTTP API, throttled</text>
+
+  <rect x="360" y="246" width="580" height="296" rx="10" fill="#fff" stroke="#0d1b2a" stroke-width="2"/>
+  <text x="380" y="276" font-size="18" font-weight="800" fill="#0d1b2a">AWS Lambda  (Python 3.12, one function)</text>
+
+  <rect x="380" y="296" width="170" height="104" rx="6" fill="#f5f7fa" stroke="#0d1b2a" stroke-width="1.5"/>
+  <text x="394" y="322" font-size="16" font-weight="800" fill="#0d1b2a">handler.py</text>
+  <text x="394" y="344" font-size="13" fill="#0d1b2a">Routes, input checks,</text>
+  <text x="394" y="362" font-size="13" fill="#0d1b2a">rate limit, security</text>
+  <text x="394" y="380" font-size="13" fill="#0d1b2a">headers, static files</text>
+
+  <rect x="565" y="296" width="180" height="104" rx="6" fill="#e3edfa" stroke="#0a4da2" stroke-width="2"/>
+  <text x="579" y="322" font-size="16" font-weight="800" fill="#0a4da2">engine.py</text>
+  <text x="579" y="344" font-size="13" fill="#0d1b2a">Stock, hours, distance,</text>
+  <text x="579" y="362" font-size="13" fill="#0d1b2a">route planning.</text>
+  <text x="579" y="380" font-size="13" font-weight="700" fill="#0d1b2a">No AI: repeatable</text>
+
+  <rect x="760" y="296" width="165" height="104" rx="6" fill="#fff4cc" stroke="#d9a400" stroke-width="2"/>
+  <text x="774" y="322" font-size="16" font-weight="800" fill="#3d2f00">ai.py</text>
+  <text x="774" y="344" font-size="13" fill="#3d2f00">Four Bedrock stages,</text>
+  <text x="774" y="362" font-size="13" fill="#3d2f00">validation, safety</text>
+  <text x="774" y="380" font-size="13" fill="#3d2f00">rules, fallbacks</text>
+
+  <rect x="380" y="418" width="545" height="100" rx="6" fill="#f5f7fa" stroke="#cfd8e3" stroke-width="1.5"/>
+  <text x="394" y="444" font-size="14" font-weight="700" fill="#0d1b2a">Bundled in the package</text>
+  <text x="394" y="466" font-size="13" fill="#0d1b2a">70 supplies, each with a safety policy: free, caution or none</text>
+  <text x="394" y="486" font-size="13" fill="#0d1b2a">Demo store snapshot: fictional stores and stock (swap for real data)</text>
+  <text x="394" y="506" font-size="13" fill="#0d1b2a">Also serves the app: HTML, JS, fonts, map library, no CDN</text>
+
+  <rect x="360" y="580" width="300" height="86" rx="8" fill="#fff" stroke="#0d1b2a" stroke-width="2"/>
+  <text x="378" y="608" font-size="17" font-weight="800" fill="#0d1b2a">Amazon DynamoDB</text>
+  <text x="378" y="630" font-size="14" fill="#0d1b2a">Neighbor stock reports</text>
+  <text x="378" y="650" font-size="14" fill="#44546a">Expire after 6 hours (TTL)</text>
+
+  <rect x="690" y="580" width="250" height="86" rx="8" fill="#fff" stroke="#0d1b2a" stroke-width="2"/>
+  <text x="708" y="608" font-size="17" font-weight="800" fill="#0d1b2a">Amazon CloudWatch</text>
+  <text x="708" y="630" font-size="14" fill="#0d1b2a">Logs, 14 day retention</text>
+
+  <!-- Bedrock -->
+  <rect x="1000" y="130" width="240" height="412" rx="12" fill="#fff" stroke="#0a4da2" stroke-width="3"/>
+  <rect x="1000" y="130" width="240" height="50" rx="12" fill="#0a4da2"/>
+  <rect x="1000" y="160" width="240" height="20" fill="#0a4da2"/>
+  <text x="1018" y="162" font-size="18" font-weight="800" fill="#fff">Amazon Bedrock</text>
+  <text x="1018" y="206" font-size="13" fill="#44546a">Converse API, tried in order</text>
+  <rect x="1018" y="218" width="204" height="52" rx="6" fill="#e3edfa" stroke="#0a4da2" stroke-width="1.5"/>
+  <text x="1030" y="240" font-size="14" font-weight="800" fill="#0a4da2">1  Claude Haiku 4.5</text>
+  <text x="1030" y="258" font-size="12" fill="#0d1b2a">US inference profile</text>
+  <rect x="1018" y="288" width="204" height="52" rx="6" fill="#fff" stroke="#0a4da2" stroke-width="1.5"/>
+  <text x="1030" y="310" font-size="14" font-weight="800" fill="#0d1b2a">2  Nova 2 Lite</text>
+  <text x="1030" y="328" font-size="12" fill="#0d1b2a">US inference profile</text>
+  <rect x="1018" y="358" width="204" height="52" rx="6" fill="#fff" stroke="#0a4da2" stroke-width="1.5"/>
+  <text x="1030" y="380" font-size="14" font-weight="800" fill="#0d1b2a">3  Nova 2 Lite</text>
+  <text x="1030" y="398" font-size="12" fill="#0d1b2a">in-region, if profiles are blocked</text>
+  <rect x="1018" y="428" width="204" height="52" rx="6" fill="#fff" stroke="#0a4da2" stroke-width="1.5"/>
+  <text x="1030" y="450" font-size="14" font-weight="800" fill="#0d1b2a">4  Nova Lite</text>
+  <text x="1030" y="468" font-size="12" fill="#0d1b2a">in-region, last resort</text>
+  <text x="1018" y="506" font-size="13" fill="#0d1b2a">One JSON repair retry per model</text>
+  <text x="1018" y="526" font-size="13" fill="#0d1b2a">Optional Bedrock Guardrails</text>
+
+  <rect x="1000" y="580" width="240" height="86" rx="8" fill="#fff4cc" stroke="#d9a400" stroke-width="2"/>
+  <text x="1016" y="608" font-size="16" font-weight="800" fill="#3d2f00">Rules fallback</text>
+  <text x="1016" y="630" font-size="13" fill="#3d2f00">If every model fails, the app</text>
+  <text x="1016" y="648" font-size="13" fill="#3d2f00">still answers and says so</text>
+
+
+  <!-- road routing (third party) -->
+  <rect x="40" y="420" width="250" height="104" rx="8" fill="#fff" stroke="#0d1b2a" stroke-width="2"/>
+  <text x="56" y="448" font-size="16" font-weight="800" fill="#0d1b2a">OSRM road routing</text>
+  <text x="56" y="470" font-size="13" fill="#0d1b2a">Public OpenStreetMap service</text>
+  <text x="56" y="488" font-size="13" fill="#0d1b2a">Fastest drive through the stops</text>
+  <text x="56" y="508" font-size="13" fill="#44546a">If it is down: a straight line</text>
+
+  <!-- arrows -->
+  <path d="M290 181 H358" fill="none" stroke="#0d1b2a" stroke-width="2.5" marker-end="url(#arr)"/>
+  <text x="298" y="172" font-size="11" fill="#44546a">HTTPS</text>
+  <path d="M460 214 V244" fill="none" stroke="#0d1b2a" stroke-width="2.5" marker-end="url(#arr)"/>
+  <path d="M925 348 H998" fill="none" stroke="#0a4da2" stroke-width="3" marker-end="url(#arrb)"/>
+  <rect x="936" y="357" width="60" height="18" rx="3" fill="#eef2f6"/>
+  <text x="942" y="371" font-size="12" font-weight="700" fill="#0a4da2">converse</text>
+  <path d="M510 542 V578" fill="none" stroke="#0d1b2a" stroke-width="2.5" marker-end="url(#arr)"/>
+  <path d="M1120 542 V578" fill="none" stroke="#d9a400" stroke-width="2.5" stroke-dasharray="6 5" marker-end="url(#arr)"/>
+  <text x="1138" y="566" font-size="12" fill="#44546a">if all fail</text>
+
+  <path d="M358 472 H292" fill="none" stroke="#0d1b2a" stroke-width="2.5" marker-end="url(#arr)"/>
+  <text x="302" y="452" font-size="11" fill="#44546a">roads</text>
+
+  <!-- pipeline strip -->
+  <text x="40" y="712" font-size="14" font-weight="700" fill="#44546a">One request, four stages (the browser calls them in order):</text>
+  <g font-size="13">
+    <rect x="40" y="722" width="290" height="30" rx="5" fill="#fff4cc" stroke="#d9a400"/>
+    <text x="52" y="742" fill="#3d2f00"><tspan font-weight="800">1 Understand</tspan>  Bedrock: text to needs</text>
+    <rect x="345" y="722" width="290" height="30" rx="5" fill="#e3edfa" stroke="#0a4da2"/>
+    <text x="357" y="742" fill="#0d1b2a"><tspan font-weight="800">2 Search</tspan>  code: stock, hours, distance</text>
+    <rect x="650" y="722" width="290" height="30" rx="5" fill="#fff4cc" stroke="#d9a400"/>
+    <text x="662" y="742" fill="#3d2f00"><tspan font-weight="800">3 Alternatives</tspan>  Bedrock + allowlist</text>
+    <rect x="955" y="722" width="285" height="30" rx="5" fill="#fff4cc" stroke="#d9a400"/>
+    <text x="967" y="742" fill="#3d2f00"><tspan font-weight="800">4 Briefing</tspan>  Bedrock + route</text>
+  </g>
+</svg>

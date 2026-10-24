@@ -1,0 +1,98 @@
+[
+ {
+  "id": "p00",
+  "label": "Downtown San José",
+  "lat": 37.3382,
+  "lng": -121.8863
+ },
+ {
+  "id": "p01",
+  "label": "SJSU and Naglee Park",
+  "lat": 37.333,
+  "lng": -121.878
+ },
+ {
+  "id": "p02",
+  "label": "Japantown",
+  "lat": 37.349,
+  "lng": -121.894
+ },
+ {
+  "id": "p03",
+  "label": "Willow Glen",
+  "lat": 37.301,
+  "lng": -121.901
+ },
+ {
+  "id": "p04",
+  "label": "Rose Garden",
+  "lat": 37.329,
+  "lng": -121.923
+ },
+ {
+  "id": "p05",
+  "label": "Santa Clara",
+  "lat": 37.3541,
+  "lng": -121.9552
+ },
+ {
+  "id": "p06",
+  "label": "Campbell",
+  "lat": 37.2872,
+  "lng": -121.95
+ },
+ {
+  "id": "p07",
+  "label": "Cambrian",
+  "lat": 37.253,
+  "lng": -121.923
+ },
+ {
+  "id": "p08",
+  "label": "Almaden Valley",
+  "lat": 37.226,
+  "lng": -121.864
+ },
+ {
+  "id": "p09",
+  "label": "Blossom Valley",
+  "lat": 37.275,
+  "lng": -121.845
+ },
+ {
+  "id": "p10",
+  "label": "Evergreen",
+  "lat": 37.317,
+  "lng": -121.78
+ },
+ {
+  "id": "p11",
+  "label": "Alum Rock",
+  "lat": 37.366,
+  "lng": -121.818
+ },
+ {
+  "id": "p12",
+  "label": "Berryessa",
+  "lat": 37.38,
+  "lng": -121.865
+ },
+ {
+  "id": "p13",
+  "label": "North San José",
+  "lat": 37.4,
+  "lng": -121.94
+ },
+ {
+  "id": "p14",
+  "label": "Milpitas",
+  "lat": 37.4323,
+  "lng": -121.8996
+ },
+ {
+  "id": "p15",
+  "label": "Saratoga",
+  "lat": 37.2638,
+  "lng": -122.023
+ }
+]

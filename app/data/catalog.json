@@ -1,0 +1,1274 @@
+[
+ {
+  "id": "water_bottled",
+  "name": "Bottled drinking water",
+  "category": "Water",
+  "tags": [
+   "drinking-water",
+   "hydration"
+  ],
+  "aliases": [
+   "water",
+   "bottled water",
+   "drinking water",
+   "case of water",
+   "water bottles",
+   "gallons of water"
+  ],
+  "policy": "free",
+  "note": "Plan on about 1 gallon per person per day.",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "water_jug",
+  "name": "Water jug or container (1-5 gal)",
+  "category": "Water",
+  "tags": [
+   "water-storage",
+   "drinking-water"
+  ],
+  "aliases": [
+   "water jug",
+   "water container",
+   "water storage",
+   "jerry can for water"
+  ],
+  "policy": "free",
+  "note": "Fill only from a source you trust; treat the water if unsure.",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "water_filter",
+  "name": "Portable water filter",
+  "category": "Water",
+  "tags": [
+   "water-treatment",
+   "drinking-water"
+  ],
+  "aliases": [
+   "water filter",
+   "filter",
+   "lifestraw",
+   "water purifier"
+  ],
+  "policy": "free",
+  "note": "Check what the filter removes; many do not remove viruses.",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "water_tabs",
+  "name": "Water purification tablets",
+  "category": "Water",
+  "tags": [
+   "water-treatment"
+  ],
+  "aliases": [
+   "purification tablets",
+   "water tablets",
+   "iodine tablets",
+   "chlorine dioxide"
+  ],
+  "policy": "free",
+  "note": "Follow the package directions and wait time.",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "bleach",
+  "name": "Unscented household bleach",
+  "category": "Water",
+  "tags": [
+   "water-treatment",
+   "sanitation"
+  ],
+  "aliases": [
+   "bleach"
+  ],
+  "policy": "caution",
+  "note": "Use for disinfection only as the label or CDC directs. Never mix with other cleaners.",
+  "escalate": "",
+  "safe_subs": [
+   "water_tabs",
+   "water_filter"
+  ]
+ },
+ {
+  "id": "electrolyte",
+  "name": "Electrolyte or rehydration drink",
+  "category": "Water",
+  "tags": [
+   "hydration",
+   "electrolytes"
+  ],
+  "aliases": [
+   "electrolyte",
+   "gatorade",
+   "pedialyte",
+   "rehydration",
+   "sports drink"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "food_canned",
+  "name": "Canned food (ready to eat)",
+  "category": "Food",
+  "tags": [
+   "shelf-food",
+   "no-cook"
+  ],
+  "aliases": [
+   "canned food",
+   "cans",
+   "canned beans",
+   "canned soup",
+   "canned tuna",
+   "food"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "food_meals",
+  "name": "Shelf-stable meals / MREs",
+  "category": "Food",
+  "tags": [
+   "shelf-food",
+   "no-cook"
+  ],
+  "aliases": [
+   "mre",
+   "mres",
+   "freeze dried",
+   "shelf stable meals",
+   "emergency meals"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "food_bars",
+  "name": "Energy or protein bars",
+  "category": "Food",
+  "tags": [
+   "shelf-food",
+   "no-cook"
+  ],
+  "aliases": [
+   "bars",
+   "protein bars",
+   "granola bars",
+   "energy bars",
+   "snacks"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "peanut_butter",
+  "name": "Peanut or nut butter",
+  "category": "Food",
+  "tags": [
+   "shelf-food",
+   "no-cook"
+  ],
+  "aliases": [
+   "peanut butter",
+   "nut butter"
+  ],
+  "policy": "free",
+  "note": "Check for allergies first.",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "dried_fruit_nuts",
+  "name": "Dried fruit and nuts",
+  "category": "Food",
+  "tags": [
+   "shelf-food",
+   "no-cook"
+  ],
+  "aliases": [
+   "dried fruit",
+   "nuts",
+   "trail mix"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "can_opener",
+  "name": "Manual can opener",
+  "category": "Food",
+  "tags": [
+   "food-prep"
+  ],
+  "aliases": [
+   "can opener",
+   "manual can opener",
+   "tin opener"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "pet_food",
+  "name": "Pet food (dry)",
+  "category": "Pets",
+  "tags": [
+   "pet-food",
+   "pets"
+  ],
+  "aliases": [
+   "pet food",
+   "dog food",
+   "cat food",
+   "kibble"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "baby_formula_powder",
+  "name": "Infant formula (powder)",
+  "category": "Baby",
+  "tags": [
+   "baby-feeding",
+   "infant"
+  ],
+  "aliases": [
+   "formula",
+   "baby formula",
+   "infant formula",
+   "powdered formula"
+  ],
+  "policy": "caution",
+  "note": "Never dilute formula or make your own. Ask the pediatrician before switching types.",
+  "escalate": "Call the baby's pediatrician or a WIC office. Dialing 211 can point you to emergency formula supplies.",
+  "safe_subs": [
+   "baby_formula_rtf"
+  ]
+ },
+ {
+  "id": "baby_formula_rtf",
+  "name": "Infant formula (ready to feed)",
+  "category": "Baby",
+  "tags": [
+   "baby-feeding",
+   "infant"
+  ],
+  "aliases": [
+   "ready to feed formula",
+   "rtf formula",
+   "liquid formula",
+   "ready-to-feed"
+  ],
+  "policy": "caution",
+  "note": "Needs no water, which helps when tap water is unsafe. Check with the pediatrician before switching types.",
+  "escalate": "",
+  "safe_subs": [
+   "baby_formula_powder"
+  ]
+ },
+ {
+  "id": "baby_food",
+  "name": "Baby food pouches",
+  "category": "Baby",
+  "tags": [
+   "baby-feeding",
+   "infant",
+   "no-cook"
+  ],
+  "aliases": [
+   "baby food",
+   "pouches",
+   "purees"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "diapers",
+  "name": "Diapers",
+  "category": "Baby",
+  "tags": [
+   "infant-care"
+  ],
+  "aliases": [
+   "diapers",
+   "nappies",
+   "pull-ups"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "wipes",
+  "name": "Wet wipes",
+  "category": "Baby",
+  "tags": [
+   "hygiene",
+   "infant-care"
+  ],
+  "aliases": [
+   "wipes",
+   "wet wipes",
+   "baby wipes"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "batt_aa",
+  "name": "AA batteries",
+  "category": "Power and light",
+  "tags": [
+   "batteries",
+   "portable-power"
+  ],
+  "aliases": [
+   "aa batteries",
+   "aa",
+   "double a"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "batt_aaa",
+  "name": "AAA batteries",
+  "category": "Power and light",
+  "tags": [
+   "batteries",
+   "portable-power"
+  ],
+  "aliases": [
+   "aaa batteries",
+   "aaa"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "batt_d",
+  "name": "D batteries",
+  "category": "Power and light",
+  "tags": [
+   "batteries",
+   "portable-power"
+  ],
+  "aliases": [
+   "d batteries",
+   "d-cell",
+   "d cell",
+   "d size batteries"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "flashlight_led",
+  "name": "LED flashlight",
+  "category": "Power and light",
+  "tags": [
+   "light"
+  ],
+  "aliases": [
+   "flashlight",
+   "torch"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "headlamp",
+  "name": "Headlamp",
+  "category": "Power and light",
+  "tags": [
+   "light",
+   "hands-free"
+  ],
+  "aliases": [
+   "headlamp",
+   "head lamp",
+   "headlight"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "lantern_led_battery",
+  "name": "LED lantern (battery)",
+  "category": "Power and light",
+  "tags": [
+   "light"
+  ],
+  "aliases": [
+   "lantern",
+   "led lantern",
+   "battery lantern"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "lantern_solar_usb",
+  "name": "Solar or hand-crank lantern with USB charging",
+  "category": "Power and light",
+  "tags": [
+   "light",
+   "phone-charging",
+   "rechargeable"
+  ],
+  "aliases": [
+   "solar lantern",
+   "crank lantern",
+   "solar light",
+   "hand crank light"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "glow_sticks",
+  "name": "Glow sticks",
+  "category": "Power and light",
+  "tags": [
+   "light"
+  ],
+  "aliases": [
+   "glow sticks",
+   "light sticks",
+   "chem lights"
+  ],
+  "policy": "free",
+  "note": "A flame-free light source that is safe around children. One use only.",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "candles",
+  "name": "Candles",
+  "category": "Power and light",
+  "tags": [
+   "light"
+  ],
+  "aliases": [
+   "candles"
+  ],
+  "policy": "caution",
+  "note": "Fire risk: never leave a flame unattended and never use one if you smell gas. LED light is safer.",
+  "escalate": "",
+  "safe_subs": [
+   "glow_sticks",
+   "flashlight_led",
+   "headlamp",
+   "lantern_led_battery",
+   "lantern_solar_usb"
+  ]
+ },
+ {
+  "id": "power_bank",
+  "name": "USB power bank",
+  "category": "Power and light",
+  "tags": [
+   "phone-charging",
+   "portable-power"
+  ],
+  "aliases": [
+   "power bank",
+   "battery pack",
+   "portable charger",
+   "phone charger",
+   "charge phones",
+   "charge my phone",
+   "phone battery"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "car_charger",
+  "name": "Car phone charger",
+  "category": "Power and light",
+  "tags": [
+   "phone-charging"
+  ],
+  "aliases": [
+   "car charger",
+   "car phone charger"
+  ],
+  "policy": "free",
+  "note": "Charge from a parked car with the engine running outdoors only, never in a closed garage.",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "radio_crank",
+  "name": "Hand-crank or solar emergency radio",
+  "category": "Power and light",
+  "tags": [
+   "info-radio",
+   "phone-charging",
+   "rechargeable"
+  ],
+  "aliases": [
+   "radio",
+   "emergency radio",
+   "crank radio",
+   "weather radio"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "radio_battery",
+  "name": "Battery-powered radio",
+  "category": "Power and light",
+  "tags": [
+   "info-radio"
+  ],
+  "aliases": [
+   "battery radio",
+   "am fm radio",
+   "transistor radio"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "generator_portable",
+  "name": "Portable generator",
+  "category": "Power and light",
+  "tags": [
+   "backup-power"
+  ],
+  "aliases": [
+   "generator",
+   "portable generator"
+  ],
+  "policy": "caution",
+  "note": "Run outdoors only, well away from doors and windows. Generator exhaust has carbon monoxide that can kill.",
+  "escalate": "",
+  "safe_subs": [
+   "power_station",
+   "power_bank"
+  ]
+ },
+ {
+  "id": "power_station",
+  "name": "Portable power station",
+  "category": "Power and light",
+  "tags": [
+   "backup-power",
+   "phone-charging",
+   "rechargeable"
+  ],
+  "aliases": [
+   "power station",
+   "battery generator",
+   "jackery",
+   "portable power",
+   "solar generator"
+  ],
+  "policy": "free",
+  "note": "Can run medical equipment only if its wattage and runtime fit. Check the device label.",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "extension_cord",
+  "name": "Heavy-duty extension cord",
+  "category": "Power and light",
+  "tags": [
+   "power-accessory"
+  ],
+  "aliases": [
+   "extension cord",
+   "power cord"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "gas_can",
+  "name": "Gasoline can",
+  "category": "Power and light",
+  "tags": [
+   "fuel"
+  ],
+  "aliases": [
+   "gas can",
+   "gasoline can",
+   "fuel can"
+  ],
+  "policy": "caution",
+  "note": "Store fuel outdoors, away from flame and living space.",
+  "escalate": "",
+  "safe_subs": []
+ },
+ {
+  "id": "propane_1lb",
+  "name": "Propane canister (1 lb)",
+  "category": "Cooking and heat",
+  "tags": [
+   "fuel-propane",
+   "cooking-fuel"
+  ],
+  "aliases": [
+   "propane",
+   "propane canister",
+   "propane tank",
+   "camping propane",
+   "1 lb propane"
+  ],
+  "policy": "caution",
+  "note": "Outdoor use only.",
+  "escalate": "",
+  "safe_subs": [
+   "butane_canister",
+   "canned_fuel",
+   "food_meals"
+  ]
+ },
+ {
+  "id": "propane_20lb",
+  "name": "Propane tank (20 lb, grill)",
+  "category": "Cooking and heat",
+  "tags": [
+   "fuel-propane",
+   "cooking-fuel"
+  ],
+  "aliases": [
+   "20 lb propane",
+   "bbq propane",
+   "grill propane"
+  ],
+  "policy": "caution",
+  "note": "Outdoor use only.",
+  "escalate": "A grill tank does not connect to a camp stove or work as a swap for a small canister without the right adapter. Ask store staff about tank exchange or refill, and use it outdoors only.",
+  "safe_subs": []
+ },
+ {
+  "id": "camp_stove_propane",
+  "name": "Camp stove (propane)",
+  "category": "Cooking and heat",
+  "tags": [
+   "cooking",
+   "stove"
+  ],
+  "aliases": [
+   "camp stove",
+   "camping stove",
+   "portable stove"
+  ],
+  "policy": "free",
+  "note": "Outdoor use only.",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "butane_canister",
+  "name": "Butane canister",
+  "category": "Cooking and heat",
+  "tags": [
+   "fuel-butane",
+   "cooking-fuel"
+  ],
+  "aliases": [
+   "butane",
+   "butane canister"
+  ],
+  "policy": "caution",
+  "note": "Fits butane stoves only. It will not work in a propane stove.",
+  "escalate": "",
+  "safe_subs": [
+   "propane_1lb",
+   "canned_fuel"
+  ]
+ },
+ {
+  "id": "canned_fuel",
+  "name": "Canned heat fuel (chafing fuel)",
+  "category": "Cooking and heat",
+  "tags": [
+   "cooking-fuel",
+   "heat"
+  ],
+  "aliases": [
+   "sterno",
+   "canned heat",
+   "chafing fuel"
+  ],
+  "policy": "caution",
+  "note": "Burns hot. Ventilate and keep away from children.",
+  "escalate": "",
+  "safe_subs": [
+   "butane_canister",
+   "propane_1lb"
+  ]
+ },
+ {
+  "id": "charcoal",
+  "name": "Charcoal",
+  "category": "Cooking and heat",
+  "tags": [
+   "cooking-fuel"
+  ],
+  "aliases": [
+   "charcoal",
+   "briquettes"
+  ],
+  "policy": "caution",
+  "note": "Outdoors only. Burning charcoal indoors produces deadly carbon monoxide.",
+  "escalate": "",
+  "safe_subs": [
+   "propane_1lb",
+   "propane_20lb",
+   "canned_fuel"
+  ]
+ },
+ {
+  "id": "lighter_matches",
+  "name": "Lighters or waterproof matches",
+  "category": "Cooking and heat",
+  "tags": [
+   "fire-starting"
+  ],
+  "aliases": [
+   "lighter",
+   "matches",
+   "lighters"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "cooler",
+  "name": "Insulated cooler",
+  "category": "Cooking and heat",
+  "tags": [
+   "keep-cold"
+  ],
+  "aliases": [
+   "cooler",
+   "ice chest",
+   "insulated bag"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "ice_bag",
+  "name": "Bagged ice",
+  "category": "Cooking and heat",
+  "tags": [
+   "keep-cold"
+  ],
+  "aliases": [
+   "ice",
+   "bag of ice",
+   "bagged ice"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "ice_packs",
+  "name": "Reusable gel ice packs",
+  "category": "Cooking and heat",
+  "tags": [
+   "keep-cold"
+  ],
+  "aliases": [
+   "ice packs",
+   "gel packs",
+   "cold packs"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "mylar_blanket",
+  "name": "Emergency (mylar) blankets",
+  "category": "Shelter and repair",
+  "tags": [
+   "warmth",
+   "shelter"
+  ],
+  "aliases": [
+   "mylar blanket",
+   "space blanket",
+   "emergency blanket",
+   "blanket",
+   "blankets"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "sleeping_bag",
+  "name": "Sleeping bag",
+  "category": "Shelter and repair",
+  "tags": [
+   "warmth",
+   "shelter"
+  ],
+  "aliases": [
+   "sleeping bag",
+   "bedding"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "hand_warmers",
+  "name": "Hand warmers",
+  "category": "Shelter and repair",
+  "tags": [
+   "warmth"
+  ],
+  "aliases": [
+   "hand warmers"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "tent",
+  "name": "Tent",
+  "category": "Shelter and repair",
+  "tags": [
+   "shelter"
+  ],
+  "aliases": [
+   "tent"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "tarp",
+  "name": "Heavy-duty tarp",
+  "category": "Shelter and repair",
+  "tags": [
+   "shelter",
+   "repair"
+  ],
+  "aliases": [
+   "tarp",
+   "tarpaulin"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "plastic_sheeting",
+  "name": "Plastic sheeting",
+  "category": "Shelter and repair",
+  "tags": [
+   "shelter",
+   "repair"
+  ],
+  "aliases": [
+   "plastic sheeting",
+   "visqueen"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "duct_tape",
+  "name": "Duct tape",
+  "category": "Shelter and repair",
+  "tags": [
+   "repair"
+  ],
+  "aliases": [
+   "duct tape"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "sandbags",
+  "name": "Sandbags",
+  "category": "Shelter and repair",
+  "tags": [
+   "flood-defense"
+  ],
+  "aliases": [
+   "sandbags",
+   "sand bags"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "work_gloves",
+  "name": "Heavy work gloves",
+  "category": "Shelter and repair",
+  "tags": [
+   "hand-protection"
+  ],
+  "aliases": [
+   "work gloves",
+   "gloves"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "n95_mask",
+  "name": "N95 respirator masks",
+  "category": "Health and safety",
+  "tags": [
+   "smoke-protection"
+  ],
+  "aliases": [
+   "n95",
+   "n95 mask",
+   "respirator mask",
+   "smoke mask",
+   "mask",
+   "masks"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "respirator_p100",
+  "name": "P100 half-face respirator",
+  "category": "Health and safety",
+  "tags": [
+   "smoke-protection"
+  ],
+  "aliases": [
+   "p100",
+   "respirator"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "goggles",
+  "name": "Safety goggles",
+  "category": "Health and safety",
+  "tags": [
+   "eye-protection"
+  ],
+  "aliases": [
+   "goggles",
+   "safety glasses"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "first_aid_kit",
+  "name": "First aid kit",
+  "category": "Health and safety",
+  "tags": [
+   "first-aid"
+  ],
+  "aliases": [
+   "first aid kit",
+   "first aid"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "bandages",
+  "name": "Bandages and gauze",
+  "category": "Health and safety",
+  "tags": [
+   "first-aid"
+  ],
+  "aliases": [
+   "bandages",
+   "gauze",
+   "band-aids"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "antiseptic",
+  "name": "Antiseptic wipes or ointment",
+  "category": "Health and safety",
+  "tags": [
+   "first-aid"
+  ],
+  "aliases": [
+   "antiseptic",
+   "antibiotic ointment",
+   "antiseptic wipes"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "pain_reliever",
+  "name": "Over-the-counter pain reliever",
+  "category": "Health and safety",
+  "tags": [
+   "otc-medicine"
+  ],
+  "aliases": [
+   "pain reliever",
+   "ibuprofen",
+   "acetaminophen",
+   "tylenol",
+   "advil",
+   "painkillers"
+  ],
+  "policy": "caution",
+  "note": "Follow the label. Children's doses depend on weight, so ask a pharmacist.",
+  "escalate": "Ask a pharmacist which over-the-counter option is safe for you or your child.",
+  "safe_subs": []
+ },
+ {
+  "id": "hand_sanitizer",
+  "name": "Hand sanitizer",
+  "category": "Health and safety",
+  "tags": [
+   "hygiene",
+   "sanitation"
+  ],
+  "aliases": [
+   "hand sanitizer",
+   "sanitizer"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "toilet_paper",
+  "name": "Toilet paper",
+  "category": "Health and safety",
+  "tags": [
+   "sanitation"
+  ],
+  "aliases": [
+   "toilet paper",
+   "tp"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "trash_bags",
+  "name": "Heavy trash bags",
+  "category": "Health and safety",
+  "tags": [
+   "sanitation"
+  ],
+  "aliases": [
+   "trash bags",
+   "garbage bags"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "feminine_hygiene",
+  "name": "Feminine hygiene products",
+  "category": "Health and safety",
+  "tags": [
+   "personal-care"
+  ],
+  "aliases": [
+   "pads",
+   "tampons",
+   "feminine hygiene",
+   "period products"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "insulin",
+  "name": "Insulin (prescription)",
+  "category": "Medical",
+  "tags": [
+   "rx",
+   "diabetes-care"
+  ],
+  "aliases": [
+   "insulin"
+  ],
+  "policy": "none",
+  "note": "Prescription only. There is no safe substitute you can buy yourself.",
+  "escalate": "Call your pharmacy or prescriber now and ask about an emergency supply. Keep insulin cool but never frozen. Check the label or ask a pharmacist how long it stays good at room temperature.",
+  "safe_subs": null
+ },
+ {
+  "id": "rx_medication",
+  "name": "Prescription medication (refill)",
+  "category": "Medical",
+  "tags": [
+   "rx"
+  ],
+  "aliases": [
+   "prescription",
+   "medication",
+   "medicine",
+   "meds",
+   "refill",
+   "rx",
+   "pills",
+   "inhaler"
+  ],
+  "policy": "none",
+  "note": "Prescription only. There is no safe substitute you can buy yourself.",
+  "escalate": "Call your pharmacy or doctor and ask about an emergency supply. If you cannot reach them, dial 211 or contact the Red Cross.",
+  "safe_subs": null
+ },
+ {
+  "id": "glucose_tabs",
+  "name": "Glucose tablets (fast sugar)",
+  "category": "Medical",
+  "tags": [
+   "diabetes-care"
+  ],
+  "aliases": [
+   "glucose tablets",
+   "glucose tabs",
+   "glucose gel"
+  ],
+  "policy": "free",
+  "note": "",
+  "escalate": "",
+  "safe_subs": null
+ },
+ {
+  "id": "glucose_strips",
+  "name": "Blood glucose test strips",
+  "category": "Medical",
+  "tags": [
+   "diabetes-care"
+  ],
+  "aliases": [
+   "test strips",
+   "glucose strips",
+   "glucose meter strips"
+  ],
+  "policy": "caution",
+  "note": "Strips must match the meter model.",
+  "escalate": "Ask a pharmacist for test strips that match your meter model.",
+  "safe_subs": []
+ },
+ {
+  "id": "oxygen_cylinder",
+  "name": "Medical oxygen (prescription)",
+  "category": "Medical",
+  "tags": [
+   "rx",
+   "oxygen"
+  ],
+  "aliases": [
+   "oxygen",
+   "oxygen tank",
+   "oxygen cylinder",
+   "oxygen concentrator"
+  ],
+  "policy": "none",
+  "note": "Prescription only. There is no safe substitute you can buy yourself.",
+  "escalate": "Call your oxygen supplier and your electric utility's medical-needs line now. If anyone is struggling to breathe, call 911.",
+  "safe_subs": null
+ }
+]
