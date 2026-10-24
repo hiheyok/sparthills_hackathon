@@ -124,20 +124,20 @@ CATALOG = [
     # Cooking, heat, cooling
     I("propane_1lb", "Propane canister (1 lb)", "Cooking and heat", ["fuel-propane", "cooking-fuel"],
       ["propane", "propane canister", "propane tank", "camping propane", "1 lb propane"], policy="caution",
-      note="Outdoor use only.", safe_subs=['butane_canister', 'canned_fuel', 'food_meals']),
+      note="Outdoor use only.", safe_subs=['food_meals']),
     I("propane_20lb", "Propane tank (20 lb, grill)", "Cooking and heat", ["fuel-propane", "cooking-fuel"],
       ["20 lb propane", "bbq propane", "grill propane"], policy="caution", note="Outdoor use only.", escalate='A grill tank does not connect to a camp stove or work as a swap for a small canister without the right adapter. Ask store staff about tank exchange or refill, and use it outdoors only.', safe_subs=[]),
     I("camp_stove_propane", "Camp stove (propane)", "Cooking and heat", ["cooking", "stove"],
       ["camp stove", "camping stove", "portable stove"], note="Outdoor use only."),
     I("butane_canister", "Butane canister", "Cooking and heat", ["fuel-butane", "cooking-fuel"],
       ["butane", "butane canister"], policy="caution",
-      note="Fits butane stoves only. It will not work in a propane stove.", safe_subs=['propane_1lb', 'canned_fuel']),
+      note="Fits butane stoves only. It will not work in a propane stove.", safe_subs=[]),
     I("canned_fuel", "Canned heat fuel (chafing fuel)", "Cooking and heat", ["cooking-fuel", "heat"],
       ["sterno", "canned heat", "chafing fuel"], policy="caution",
-      note="Burns hot. Ventilate and keep away from children.", safe_subs=['butane_canister', 'propane_1lb']),
+      note="Burns hot. Ventilate and keep away from children.", safe_subs=[]),
     I("charcoal", "Charcoal", "Cooking and heat", ["cooking-fuel"],
       ["charcoal", "briquettes"], policy="caution",
-      note="Outdoors only. Burning charcoal indoors produces deadly carbon monoxide.", safe_subs=['propane_1lb', 'propane_20lb', 'canned_fuel']),
+      note="Outdoors only. Burning charcoal indoors produces deadly carbon monoxide.", safe_subs=[]),
     I("lighter_matches", "Lighters or waterproof matches", "Cooking and heat", ["fire-starting"],
       ["lighter", "matches", "lighters"]),
     I("cooler", "Insulated cooler", "Cooking and heat", ["keep-cold"],
@@ -400,17 +400,23 @@ def build_stores():
 def ensure_supply_outside_shortage(stores):
     """Key scarce items must still exist somewhere beyond the shortage zone,
     so 'nearest in stock' is a real, far-away answer."""
+    eligible_types = ("supermarket", "bigbox", "hardware", "pharmacy", "convenience")
     for item in GUARANTEED_OUT:
         far = [s for s in stores
                if haversine_km(*EPICENTER, s["lat"], s["lng"]) > SHORTAGE_KM + 1 and s["status"] != "closed"]
         have = [s for s in far if s["inv"].get(item, {}).get("q", 0) > 0]
         need = 3 - len(have)
-        for s in far:
+        # Restock eligible far stores. Prefer ones that already list the item
+        # (just sold out); fall back to stocking it at any eligible store so the
+        # guarantee holds even if too few far stores happen to carry it.
+        candidates = [s for s in far if s["type"] in eligible_types and s not in have]
+        candidates.sort(key=lambda s: item not in s["inv"])  # restock-before-add
+        for s in candidates:
             if need <= 0:
                 break
-            if item in s["inv"] and s["inv"][item]["q"] == 0 and s["type"] in ("supermarket", "bigbox", "hardware", "pharmacy", "convenience"):
-                s["inv"][item]["q"] = random.choice([6, 12, 24])
-                need -= 1
+            s["inv"][item] = {"q": random.choice([6, 12, 24]),
+                              "age": s["inv"].get(item, {}).get("age") or verified_age()}
+            need -= 1
 
 
 def main():

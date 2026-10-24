@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 os.environ["AI_MODE"] = "auto"
@@ -166,6 +167,77 @@ class UnderstandTests(Base):
         self.assertEqual(intent["disaster"]["type"], "wildfire")
 
 
+class DeadlineTests(Base):
+    """Bedrock attempts must fit in the time the request has left (Lambda: 29 s, API Gateway: 30 s)."""
+
+    @staticmethod
+    def slow_client(clock, seconds, starts=None):
+        class SlowBedrock:
+            def converse(self, **kw):
+                if starts is not None:
+                    starts.append(clock[0])
+                clock[0] += seconds
+                return {"output": {"message": {"content": [{"text": "not JSON"}]}}}
+        return SlowBedrock()
+
+    def test_a_repair_that_cannot_fit_is_not_started(self):
+        clock, starts = [0.0], []
+        ai.set_client(self.slow_client(clock, 20, starts))
+        with mock.patch.object(ai.time, "monotonic", side_effect=lambda: clock[0]):
+            _, trace = ai.understand("I need water")
+        self.assertEqual(starts, [0.0])            # no repair at 20 s and no second model
+        self.assertEqual((trace["mode"], trace["reason"]), ("rules", "time budget used up"))
+        self.assertEqual(clock[0], 20)             # the fallback answered right after the first call
+
+    def test_each_attempt_is_asked_to_finish_inside_the_time_left(self):
+        clock, asked = [0.0], []
+        bedrock = self.slow_client(clock, 9)
+
+        def client_for(timeout_s):
+            asked.append(timeout_s)
+            return bedrock
+        with mock.patch.object(ai, "_get_client", side_effect=client_for), \
+                mock.patch.object(ai.time, "monotonic", side_effect=lambda: clock[0]):
+            ai.understand("I need water")
+        self.assertEqual(asked, [24.0, 15.0, 6.0])  # 24 s stage budget, minus 9 s per call; a 4th call would have -3 s
+
+    def test_request_deadline_reserves_time_for_the_fallback(self):
+        fake = FakeBedrock([INTENT])
+        ai.set_client(fake)
+        ai.set_deadline(7.0)                        # 7 s left in the invocation, minus the 3 s reserve, is under the 5 s minimum
+        _, trace = ai.understand("I need water")
+        self.assertEqual((fake.calls, trace["mode"]), ([], "rules"))
+        ai.set_deadline(40.0)                       # plenty: the 24 s stage budget is the only limit
+        _, trace = ai.understand("I need water")
+        self.assertEqual((len(fake.calls), trace["mode"]), (1, "bedrock"))
+
+    def test_handler_passes_the_lambda_remaining_time_to_the_ai_layer(self):
+        import handler
+
+        class Context:
+            def get_remaining_time_in_millis(self):
+                return 6000
+        seen = []
+        with mock.patch.object(ai, "set_deadline", side_effect=seen.append):
+            handler.handler({"rawPath": "/api/health", "requestContext": {"http": {"method": "GET"}}}, Context())
+        self.assertEqual(seen, [6.0, None])         # set for the request, cleared afterwards
+        fake = FakeBedrock([INTENT])
+        ai.set_client(fake)
+        event = {"rawPath": "/api/understand", "requestContext": {"http": {"method": "POST", "sourceIp": "deadline-test"}},
+                 "body": json.dumps({"text": "I need water and batteries"})}
+        body = json.loads(handler.handler(event, Context())["body"])
+        self.assertEqual((fake.calls, body["trace"]["mode"]), ([], "rules"))   # too little time: no Bedrock call at all
+        self.assertTrue(body["intent"]["needs"])
+
+    @unittest.skipIf(ClientError is None, "botocore not installed")
+    def test_real_client_never_retries_and_times_out_inside_the_time_left(self):
+        ai.set_client(None)
+        for asked in (24.0, 8.4, 5.0):
+            config = ai._get_client(asked).meta.config
+            self.assertEqual(config.retries["total_max_attempts"], 1, asked)   # max_attempts=1 would still allow one retry
+            self.assertLessEqual(config.connect_timeout + config.read_timeout, min(asked, ai.MAX_ATTEMPT_S), asked)
+
+
 class AlternativesTests(Base):
     POOL = {k: {"dist_km": 3.0 + i, "name": "x"} for i, k in enumerate(
         ["water_filter", "water_tabs", "water_jug", "lantern_solar_usb", "headlamp", "insulin", "baby_formula_rtf"])}
@@ -209,15 +281,17 @@ class AlternativesTests(Base):
         prompt = fake.calls[0]["messages"][0]["content"][0]["text"]
         self.assertIn('"allowed_substitutes": ["baby_formula_rtf"]', prompt)
 
-    def test_grill_tank_is_never_offered_for_a_camp_canister(self):
-        pool = {"propane_20lb": {"dist_km": 0.5}, "butane_canister": {"dist_km": 2.0}}
+    def test_model_cannot_offer_incompatible_fuel_for_a_camp_canister(self):
+        pool = {"propane_20lb": {"dist_km": 0.5}, "butane_canister": {"dist_km": 2.0},
+                "canned_fuel": {"dist_km": 1.0}, "food_meals": {"dist_km": 3.0}}
         reply = {"alternatives": [{"for_item": "propane_1lb", "options": [
             {"item_id": "propane_20lb", "fit": "strong", "why": "", "how_to_use": "", "caution": ""},
-            {"item_id": "butane_canister", "fit": "partial", "why": "", "how_to_use": "", "caution": ""}]}]}
+            {"item_id": "butane_canister", "fit": "partial", "why": "", "how_to_use": "", "caution": ""},
+            {"item_id": "canned_fuel", "fit": "partial"},
+            {"item_id": "food_meals", "fit": "workaround"}]}]}
         ai.set_client(FakeBedrock([reply]))
         alts, _ = ai.alternatives([{"item_id": "propane_1lb", "label": "propane", "priority": 2, "why": ""}], pool, {})
-        self.assertEqual([o["item_id"] for o in alts[0]["options"]], ["butane_canister"])
-        self.assertIn("butane stoves only", alts[0]["options"][0]["caution"])
+        self.assertEqual([o["item_id"] for o in alts[0]["options"]], ["food_meals"])
 
     def test_fallback_never_suggests_baby_food_for_formula(self):
         os.environ["AI_MODE"] = "off"
@@ -238,6 +312,47 @@ class AlternativesTests(Base):
         self.assertEqual(alts[0]["options"], [])
         self.assertIn("pharmacist", alts[0]["escalate"])
 
+    def rules_only(self, item_id, pool):
+        os.environ["AI_MODE"] = "off"
+        try:
+            ai.set_client(FakeBedrock([]))
+            alts, trace = ai.alternatives([{"item_id": item_id, "label": item_id, "priority": 2, "why": ""}], pool, {})
+        finally:
+            os.environ["AI_MODE"] = "auto"
+        self.assertEqual(trace["mode"], "rules")
+        return alts[0]
+
+    def test_fallback_does_not_swap_other_battery_sizes_or_unrelated_gear(self):
+        pool = {k: {"dist_km": 1.0 + i} for i, k in enumerate(
+            ["batt_aa", "batt_aaa", "batt_d", "radio_crank", "lantern_solar_usb", "power_bank", "headlamp", "flashlight_led"])}
+        for missing in ("batt_d", "batt_aa", "batt_aaa"):
+            alt = self.rules_only(missing, {k: v for k, v in pool.items() if k != missing})
+            self.assertEqual((alt["options"], alt["verdict"]), ([], "none_found"), missing)
+
+    def test_fallback_offers_only_substitutes_that_serve_the_same_purpose(self):
+        pool = {k: {"dist_km": 1.0 + i} for i, k in enumerate(
+            ["headlamp", "radio_crank", "food_bars", "water_tabs", "water_filter", "power_bank", "water_jug"])}
+        self.assertEqual([o["item_id"] for o in self.rules_only("water_bottled", pool)["options"]], ["water_filter", "water_tabs"])
+        self.assertEqual([o["item_id"] for o in self.rules_only("radio_battery", pool)["options"]], ["radio_crank"])
+        no_radio = {k: v for k, v in pool.items() if k != "radio_crank"}
+        self.assertEqual(self.rules_only("radio_battery", no_radio)["options"], [])   # nothing else in stock is a radio
+        lantern = self.rules_only("lantern_led_battery", {"lantern_solar_usb": {"dist_km": 3.0}, "radio_crank": {"dist_km": 0.5},
+                                                        "batt_d": {"dist_km": 0.5}})
+        self.assertEqual([(o["item_id"], o["fit"]) for o in lantern["options"]], [("lantern_solar_usb", "strong")])
+
+    def test_fallback_table_is_consistent_with_the_catalog_and_its_safety_rules(self):
+        for missing, subs in ai.FALLBACK_SUBS.items():
+            self.assertIn(missing, ai.CATALOG, missing)
+            self.assertNotEqual(ai.CATALOG[missing]["policy"], "none", f"{missing} must never be substituted")
+            for s in subs:
+                self.assertIn(s["item_id"], ai.CATALOG, f"{missing} -> {s['item_id']}")
+                self.assertNotEqual(s["item_id"], missing)
+                self.assertNotEqual(ai.CATALOG[s["item_id"]]["policy"], "none", f"{missing} -> {s['item_id']}")
+                self.assertIn(s["fit"], ("strong", "partial", "workaround"))
+                self.assertTrue(s["why"], f"{missing} -> {s['item_id']} needs an explanation")
+                if ai.CATALOG[missing]["policy"] == "caution":
+                    self.assertIn(s["item_id"], ai.CATALOG[missing]["safe_subs"], f"{missing} -> {s['item_id']} is not on its allowlist")
+
     def test_prompt_never_offers_prescription_items_as_candidates(self):
         fake = FakeBedrock([{"alternatives": [{"for_item": "water_bottled", "options": []}]}])
         ai.set_client(fake)
@@ -247,20 +362,21 @@ class AlternativesTests(Base):
         self.assertNotIn('"item_id": "insulin"', avail)
         self.assertIn('"item_id": "water_filter"', avail)
 
-    def test_fallback_prefers_tag_matches_and_keeps_cautions(self):
-        os.environ["AI_MODE"] = "off"
-        try:
-            ai.set_client(FakeBedrock([]))
-            pool = {k: {"dist_km": 2.0 + i} for i, k in enumerate(["butane_canister", "camp_stove_propane", "canned_fuel", "headlamp"])}
-            alts, trace = ai.alternatives([{"item_id": "propane_1lb", "label": "propane", "priority": 2, "why": ""}], pool, {})
-        finally:
-            os.environ["AI_MODE"] = "auto"
-        self.assertEqual(trace["mode"], "rules")
-        ids = [o["item_id"] for o in alts[0]["options"]]
-        self.assertIn("butane_canister", ids)
-        butane = next(o for o in alts[0]["options"] if o["item_id"] == "butane_canister")
-        self.assertIn("butane stoves only", butane["caution"])
-        self.assertNotIn("headlamp", ids)
+    def test_fallback_offers_a_cooking_workaround_without_incompatible_fuels(self):
+        pool = {k: {"dist_km": 2.0 + i} for i, k in enumerate(
+            ["butane_canister", "camp_stove_propane", "canned_fuel", "headlamp", "food_meals"])}
+        alt = self.rules_only("propane_1lb", pool)
+        self.assertEqual([(o["item_id"], o["fit"]) for o in alt["options"]], [("food_meals", "workaround")])
+        self.assertIn("does not provide fuel", alt["options"][0]["caution"])
+        del pool["food_meals"]
+        alt = self.rules_only("propane_1lb", pool)
+        self.assertEqual((alt["options"], alt["verdict"]), ([], "none_found"))
+
+    def test_fallback_does_not_swap_fuels_in_the_reverse_direction(self):
+        pool = {k: {"dist_km": 1.0} for k in ("propane_1lb", "propane_20lb", "butane_canister", "canned_fuel", "charcoal")}
+        for missing in ("butane_canister", "canned_fuel", "charcoal"):
+            with self.subTest(missing=missing):
+                self.assertEqual(self.rules_only(missing, pool)["options"], [])
 
 
 class BriefTests(Base):

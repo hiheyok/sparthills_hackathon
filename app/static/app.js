@@ -332,7 +332,7 @@
     return `<li class="ticket ${i.is_alt ? 'swap' : ''}"><div class="ticket-main">
       ${i.is_alt ? '<span class="tag">Substitute</span>' : ''}<span class="ticket-name">${esc(i.name)}${i.qty > 1 ? ` x${i.qty}` : ''}</span>
       ${i.is_alt ? `<span class="ticket-sub">instead of ${esc(i.replaces_name)}</span>` : ''}</div>
-      <div class="ticket-sub"><span class="${f.cls}">${esc(f.text)}</span>${i.low ? '<span class="warn">Low stock</span>' : ''}</div></li>`;
+      <div class="ticket-sub"><span class="${f.cls}">${esc(f.text)}</span>${i.low ? '<span class="warn">Low stock</span>' : ''}${i.qty_needed > i.qty ? `<span class="warn">Buy ${i.qty} of the ${i.qty_needed} you need</span>` : ''}</div></li>`;
   }
 
   function reportPanel(stop) {
@@ -357,7 +357,7 @@
     } else {
       html = `<h2 class="plan-title" id="planTitle">${esc(brief.headline)}</h2>
         ${brief.summary ? `<p class="lede">${esc(brief.summary)}</p>` : ''}
-        <div class="facts-row"><span>${stops.length} stop${stops.length > 1 ? 's' : ''}</span><span>${plan.route.total_drive_min} min driving</span><span>${sum.in_route} of ${sum.needs} items covered</span>${sum.swapped ? `<span>${sum.swapped} substitute${sum.swapped > 1 ? 's' : ''}</span>` : ''}</div>
+        <div class="facts-row"><span>${stops.length} stop${stops.length > 1 ? 's' : ''}</span><span>${plan.route.total_drive_min} min driving</span><span>${sum.covered ?? sum.in_route} of ${sum.needs} items covered</span>${sum.swapped ? `<span>${sum.swapped} substitute${sum.swapped > 1 ? 's' : ''}</span>` : ''}</div>
         <div id="mapSlot" class="map-slot"></div>
         <ol class="route"><li class="origin"><span class="node" aria-hidden="true"></span><div class="origin-text"><b>You are here</b><small>${esc(state.originLabel || '')}${state.originLabel ? ', ' : ''}leave about ${esc(plan.route.leaves)}</small></div></li>
         ${stops.map((s) => `<li class="stop"><span class="node" aria-hidden="true">${s.order}</span><div>
@@ -369,6 +369,8 @@
     }
     const unresolved = plan.unresolved.filter((u) => !plan.alternatives.some((a) => a.for_item === u.item_id));
     if (unresolved.length) html += `<p class="lede">Not found nearby: ${unresolved.map((u) => esc(u.name)).join(', ')}.</p>`;
+    const shorts = plan.shortfalls || [];
+    if (shorts.length) html += `<p class="lede">Not enough in stock for the full amount: ${shorts.map((u) => `${esc(u.name)} (${u.found} of ${u.qty})`).join(', ')}.</p>`;
     const notes = [...(brief.safety_notes || [])];
     const stuck = brief.if_stuck || [];
     const box = (title, list) => `<div class="next-step"><b>${title}</b><ul>${list.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div>`;
@@ -393,6 +395,7 @@
         const st = a.stats || {};
         const sub = `${st.checked || 0} stores checked within ${fmtMi(state.radius)}` + (a.nearest_any ? `. Nearest with stock: ${a.nearest_any.name}, ${fmtMi(a.nearest_any.dist_km)} away.` : '. None have it in stock.');
         return `<article class="sign ${noSub ? 'no-sub' : ''}"><div class="sign-head"><h3>${esc(head)}</h3><p>${esc(sub)}</p></div><div class="sign-body">
+          ${a.quantity_note ? `<p class="caution"><b>Quantity not confirmed:</b> ${esc(a.quantity_note)}</p>` : ''}
           ${a.options.map((o) => `<div class="opt ${esc(o.fit)}"><h4>${esc(o.name)}<span class="fit">${esc(FIT_TEXT[o.fit] || '')}</span></h4>
             ${o.why ? `<p>${esc(o.why)}</p>` : ''}${o.how_to_use ? `<p>${esc(o.how_to_use)}</p>` : ''}
             ${o.caution ? `<p class="caution"><b>Check:</b> ${esc(o.caution)}</p>` : ''}
@@ -568,12 +571,17 @@
     const t = e.target.closest('[data-action], [data-report]');
     if (!t) return;
     if (t.dataset.report !== undefined) {
+      if (t.disabled) return;
+      t.disabled = true;
       try {
         await post('/api/report', { store_id: t.dataset.store, item_id: t.dataset.item, status: t.dataset.status });
         t.classList.add('sent');
         t.textContent = 'Sent';
         toast('Thanks. Neighbors will see this for the next 6 hours.');
-      } catch (err) { toast(err.message || 'Could not send that report.'); }
+      } catch (err) {
+        t.disabled = false; // let them try again
+        toast(err.message || 'Could not send that report.');
+      }
       return;
     }
     const act = t.dataset.action;

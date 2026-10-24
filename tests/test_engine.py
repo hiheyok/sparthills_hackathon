@@ -2,10 +2,12 @@ import os
 import sys
 import time
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
 import engine as e  # noqa: E402
+import store as report_store  # noqa: E402
 
 DOWNTOWN = (37.3382, -121.8863)
 ALMADEN = (37.2260, -121.8640)
@@ -84,6 +86,37 @@ class EngineTests(unittest.TestCase):
         res = e.stock_of(e.STORE_BY_ID[sid], "water_bottled", stale, self.now)
         self.assertEqual(res[2], "snapshot")
 
+    def test_unexpired_report_stays_authoritative_while_time_passes(self):
+        base = 1_700_000_000
+        with unittest.mock.patch.object(e, "SNAPSHOT_TS", float(base)):
+            sid = next(s["id"] for s in e.STORES if s["inv"].get("insulin", {}).get("q", 0) > 0)
+            shop = e.STORE_BY_ID[sid]
+            record = dict(shop["inv"]["insulin"])
+            reports = report_store.LocalReportStore()
+            reports.put(sid, "insulin", "out", ts=base)           # newer than the record, which is `age` minutes older
+            for minutes in (0, 48, 5 * 60 + 59):                  # the inventory record never changes
+                now = base + minutes * 60
+                self.assertEqual(e.stock_of(shop, "insulin", reports.all_recent(now), now), (0, minutes, "community"), minutes)
+            now = base + report_store.REPORT_TTL_S + 60            # expired: the unchanged snapshot is back, and it has aged
+            self.assertEqual(e.stock_of(shop, "insulin", reports.all_recent(now), now),
+                             (record["q"], record["age"] + report_store.REPORT_TTL_S // 60 + 1, "snapshot"))
+
+    def test_snapshot_age_is_measured_from_one_stable_time(self):
+        base = 1_700_000_000
+        with unittest.mock.patch.object(e, "SNAPSHOT_TS", float(base)):
+            shop = {"id": "x", "inv": {"a": {"q": 5, "age": 30}}}
+            self.assertEqual(e.stock_of(shop, "a", {}, base)[1], 30)
+            self.assertEqual(e.stock_of(shop, "a", {}, base + 600)[1], 40)     # ten minutes later it is ten minutes older
+            self.assertEqual(e.stock_of(shop, "a", {}, base - 600)[1], 20)
+
+    def test_a_newer_inventory_observation_beats_an_older_report(self):
+        base = 1_700_000_000
+        shop = {"id": "x", "inv": {"a": {"q": 9, "age": 0, "ts": base + 100}}}
+        older = {("x", "a"): {"status": "out", "ts": base + 50}}
+        newer = {("x", "a"): {"status": "out", "ts": base + 150}}
+        self.assertEqual(e.stock_of(shop, "a", older, base + 200), (9, 1, "snapshot"))
+        self.assertEqual(e.stock_of(shop, "a", newer, base + 200), (0, 0, "community"))
+
     def test_store_closed_report(self):
         top = self.search("insulin")["stores"][0]["id"]
         rep = {(top, "*"): {"status": "closed", "ts": self.now}}
@@ -92,6 +125,58 @@ class EngineTests(unittest.TestCase):
     def test_partial_when_quantity_short(self):
         res = e.search_item("insulin", 999, DOWNTOWN[0], DOWNTOWN[1], 8, MORNING, {}, self.now)
         self.assertEqual(res["status"], "partial")
+
+    def plan_for(self, item, qty, reports=None):
+        return e.build_plan([need(item, 1, qty)], [], *DOWNTOWN, 8, MORNING, reports or {}, self.now)
+
+    def test_store_that_can_fill_the_quantity_is_preferred_over_a_nearer_short_one(self):
+        stores = self.search("insulin", qty=4)["stores"]
+        self.assertTrue(any(s["short"] for s in stores) and any(not s["short"] for s in stores),
+                        "demo data should offer both a short and a full store")
+        plan = self.plan_for("insulin", 4)
+        items = [i for s in plan["route"]["stops"] for i in s["items"]]
+        self.assertEqual(len(items), 1)
+        self.assertEqual((items[0]["qty"], items[0]["qty_needed"]), (4, 4))
+        self.assertGreaterEqual(items[0]["q"], 4)
+        self.assertFalse(items[0]["short"])
+        self.assertEqual(plan["shortfalls"], [])
+        self.assertEqual((plan["summary"]["covered"], plan["summary"]["short"]), (1, 0))
+
+    def test_quantity_is_split_across_stops_when_no_single_store_can_fill_it(self):
+        near = [s["id"] for s in self.search("insulin")["stores"][:2]]
+        reports = {(s["id"], "insulin"): {"status": "in_stock" if s["id"] in near else "out", "ts": self.now - 30}
+                   for s in e.STORES if "insulin" in s["inv"]}                    # exactly two stores, 5 units each
+        plan = self.plan_for("insulin", 8, reports)
+        stops = [(s["store"]["id"], i["qty"]) for s in plan["route"]["stops"] for i in s["items"]]
+        self.assertEqual(sorted(sid for sid, _ in stops), sorted(near))
+        self.assertEqual(sorted(q for _, q in stops), [3, 5])
+        self.assertTrue(all(i["qty_needed"] == 8 for s in plan["route"]["stops"] for i in s["items"]))
+        self.assertEqual(plan["shortfalls"], [])
+        self.assertEqual(plan["summary"]["covered"], 1)
+
+    def test_request_larger_than_all_available_stock_keeps_the_shortage(self):
+        plan = self.plan_for("insulin", 99)
+        units = sum(i["qty"] for s in plan["route"]["stops"] for i in s["items"])
+        self.assertGreater(units, 0)
+        self.assertLess(units, 99)
+        (short,) = plan["shortfalls"]
+        self.assertEqual((short["item_id"], short["found"], short["missing"]), ("insulin", units, 99 - units))
+        self.assertEqual((plan["summary"]["covered"], plan["summary"]["short"], plan["summary"]["unresolved"]), (0, 1, 0))
+        text = e.render_plan_text(plan)
+        self.assertIn("Not enough in stock: Insulin (prescription), found %d of 99" % units, text)
+        self.assertIn("x%d of 99" % plan["route"]["stops"][0]["items"][0]["qty"], text)
+
+    def test_best_full_store_survives_the_candidate_limit(self):
+        def shop(n, dlat, q):
+            return {"id": n, "name": n, "type": "supermarket", "hood": "x", "lat": DOWNTOWN[0] + dlat, "lng": DOWNTOWN[1],
+                    "hours": {"always": True}, "status": "open", "note": "", "inv": {"insulin": {"q": q, "age": 5}}}
+        shops = [shop("near%d" % i, 0.001 * (i + 1), 1) for i in range(9)] + [shop("far_full", 0.04, 10)]
+        with unittest.mock.patch.object(e, "STORES", shops):
+            res = e.search_item("insulin", 4, DOWNTOWN[0], DOWNTOWN[1], 10, MORNING, {}, self.now, limit=8)
+        ids = [s["id"] for s in res["stores"]]
+        self.assertEqual(len(ids), 8)
+        self.assertIn("far_full", ids)
+        self.assertEqual(res["status"], "found")
 
     def test_route_is_open_on_arrival_and_covers_found_items(self):
         needs = [need(i) for i in ("insulin", "cooler", "diapers", "food_canned")]
@@ -114,6 +199,50 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(items[0]["replaces"], "water_bottled")
         self.assertEqual(plan["summary"]["swapped"], 1)
         self.assertEqual(plan["alternatives"][0]["options"][0]["status"], "found")
+
+    def test_multi_unit_substitutes_keep_the_original_quantity_unresolved(self):
+        alts = [{"for_item": "baby_formula_powder", "options": [
+            {"item_id": "baby_formula_rtf", "fit": "strong", "qty": 1, "quantity_verified": True}]}]
+        for qty in (4, 99):
+            with self.subTest(qty=qty):
+                plan = e.build_plan([need("baby_formula_powder", 1, qty)], alts, *DOWNTOWN, 8, MORNING, {}, self.now)
+                self.assertEqual(plan["route"]["stops"], [])
+                self.assertEqual((plan["summary"]["covered"], plan["summary"]["unresolved"]), (0, 1))
+                unresolved, = plan["unresolved"]
+                self.assertEqual((unresolved["item_id"], unresolved["qty"], unresolved["reason"]),
+                                 ("baby_formula_powder", qty, "quantity_unverified"))
+                alt, = plan["alternatives"]
+                self.assertEqual(alt["qty_requested"], qty)
+                self.assertEqual([o["item_id"] for o in alt["options"]], ["baby_formula_rtf"])
+                self.assertIn("Confirm package sizes", alt["quantity_note"])
+                text = e.render_plan_text(plan)
+                self.assertIn("Quantity not confirmed:", text)
+                self.assertIn(f"You requested {qty} units", text)
+
+    def test_unstocked_substitute_is_not_presented_as_a_quantity_check(self):
+        reports = {(s["id"], "baby_formula_rtf"): {"status": "out", "ts": self.now} for s in e.STORES}
+        alts = [{"for_item": "baby_formula_powder", "options": [{"item_id": "baby_formula_rtf"}]}]
+        plan = e.build_plan([need("baby_formula_powder", 1, 4)], alts, *DOWNTOWN, 8, MORNING, reports, self.now)
+        self.assertEqual(plan["unresolved"][0]["reason"], "no_stock")
+        self.assertEqual(plan["alternatives"][0]["options"], [])
+
+    def test_incompatible_fuels_are_rejected_even_from_client_alternatives(self):
+        fuels = ("propane_1lb", "propane_20lb", "butane_canister", "canned_fuel", "charcoal")
+        for missing in fuels:
+            with self.subTest(missing=missing):
+                reports = {(s["id"], missing): {"status": "out", "ts": self.now} for s in e.STORES}
+                alts = [{"for_item": missing, "options": [{"item_id": other} for other in fuels if other != missing]}]
+                plan = e.build_plan([need(missing)], alts, *DOWNTOWN, 8, MORNING, reports, self.now)
+                self.assertEqual(plan["alternatives"][0]["options"], [])
+                self.assertEqual(plan["route"]["stops"], [])
+                self.assertEqual(plan["summary"]["unresolved"], 1)
+
+    def test_generated_catalog_preserves_fuel_compatibility_rules(self):
+        import runpy
+        from pathlib import Path
+        generated = runpy.run_path(str(Path(__file__).resolve().parent.parent / "scripts" / "gen_data.py"))["CAT"]
+        for item in ("propane_1lb", "propane_20lb", "butane_canister", "canned_fuel", "charcoal"):
+            self.assertEqual(generated[item]["safe_subs"], e.CATALOG[item]["safe_subs"], item)
 
     def test_policy_none_items_are_never_substituted(self):
         reports = {(s["id"], "insulin"): {"status": "out", "ts": self.now} for s in e.STORES if "insulin" in s["inv"]}

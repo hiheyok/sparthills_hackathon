@@ -306,6 +306,9 @@ def handler(event, context=None):
     method = (http.get("method") or event.get("httpMethod") or "GET").upper()
     path = event.get("rawPath") or event.get("path") or "/"
     ip = http.get("sourceIp") or "local"
+    # Bedrock calls may only use the time this invocation has left (minus a reserve for the fallback).
+    remaining = getattr(context, "get_remaining_time_in_millis", None)
+    ai.set_deadline(remaining() / 1000.0 if callable(remaining) else None)
     try:
         if method == "GET":
             if path in GET_ROUTES:
@@ -324,3 +327,5 @@ def handler(event, context=None):
     except Exception:  # noqa: BLE001
         log.exception("unhandled error on %s %s", method, path)
         return _resp(500, {"error": "Something went wrong on our side. Your last saved plan is still on this device."})
+    finally:
+        ai.set_deadline(None)

@@ -673,8 +673,6 @@
   "note": "Outdoor use only.",
   "escalate": "",
   "safe_subs": [
-   "butane_canister",
-   "canned_fuel",
    "food_meals"
   ]
  },
@@ -729,10 +727,7 @@
   "policy": "caution",
   "note": "Fits butane stoves only. It will not work in a propane stove.",
   "escalate": "",
-  "safe_subs": [
-   "propane_1lb",
-   "canned_fuel"
-  ]
+  "safe_subs": []
  },
  {
   "id": "canned_fuel",
@@ -750,10 +745,7 @@
   "policy": "caution",
   "note": "Burns hot. Ventilate and keep away from children.",
   "escalate": "",
-  "safe_subs": [
-   "butane_canister",
-   "propane_1lb"
-  ]
+  "safe_subs": []
  },
  {
   "id": "charcoal",
@@ -769,11 +761,7 @@
   "policy": "caution",
   "note": "Outdoors only. Burning charcoal indoors produces deadly carbon monoxide.",
   "escalate": "",
-  "safe_subs": [
-   "propane_1lb",
-   "propane_20lb",
-   "canned_fuel"
-  ]
+  "safe_subs": []
  },
  {
   "id": "lighter_matches",

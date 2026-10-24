@@ -31,10 +31,12 @@ Every catalog item has a policy:
 | Policy | Meaning | Example |
 |---|---|---|
 | `free` | Any in-stock item with the same use is fine. | Bottled water for canned water |
-| `caution` | Only items on a hand-written allowlist, with a warning shown. The list can be empty. | 1 lb propane: butane canister, canned fuel, ready-to-eat food |
+| `caution` | Only items on a hand-written allowlist, with a warning shown. The list can be empty. | 1 lb propane: ready-to-eat food as a cooking workaround; no incompatible fuel swaps |
 | `none` | Never substituted. The app says who to call instead. | Insulin, prescriptions |
 
 The model's output is checked against these rules in code (`ai.py` and again in `engine.py`). The model cannot add an item that is not in the catalog, cannot suggest something out of stock, and cannot override the policy. The "safe to swap" verdict is worked out on the server, never trusted from the browser. A keyword safety net shows a **call 911** banner for things like gas smell or chest pain, even if the model misses it.
+
+The catalog has no package-size conversion data. When more than one unit is requested and only substitutes are available, the app keeps the requested amount unresolved and asks the user to confirm equivalent quantities with the store. It shows the options without automatically adding an unverified purchase to the route.
 
 ## Run it locally (about 60 seconds)
 
@@ -84,7 +86,9 @@ If every model fails, the app still answers with the rules fallback and says so 
 
 ### Bedrock Guardrails (optional)
 
-Create a guardrail in the Bedrock console, then `GUARDRAIL_ID=<id> bash scripts/deploy.sh`. The Converse calls will include it.
+Create a guardrail in the Bedrock console, then `GUARDRAIL_ID=<id> bash scripts/deploy.sh`. The Converse calls will include it. Use the guardrail ID, not its ARN or name.
+
+The stack also allows the function role `bedrock:ApplyGuardrail` on that one guardrail in `BEDROCK_REGION`, which Bedrock requires on top of model invocation. Without it every call is denied and the app answers from rules. A guardrail with cross-Region inference turned on needs more permissions on its guardrail profiles, which the template does not grant ([AWS docs](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrail-profiles-permissions.html)).
 
 ## How it maps to the judging rubric
 
@@ -102,9 +106,10 @@ The video script is in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 ## Honest limits
 
 * **The data is fictional.** 53 invented stores in 16 San José neighborhoods and made-up stock, generated with a fixed seed (`scripts/gen_data.py`). It shows how the app behaves in a shortage. It is not a real inventory feed.
+* **The demo stock ages in real time.** Each record's "checked N minutes ago" is counted from one snapshot time (the deploy time on AWS, the server start locally), so "fresh" stock turns into "call ahead" after a few hours. A neighbor report stays in force for its 6 hours, because it is compared with that same snapshot time. Redeploy to refresh the demo data.
 * **Drive times in the plan are estimates** (straight-line distance, a detour factor and a slow fixed speed). There is no live traffic and no road closures.
 * **The road route on the map comes from a free public service.** It uses the public OSRM demo server with OpenStreetMap data. That service has no uptime promise and no live traffic, so if it is down the map shows a straight dashed line and says so. Its time can differ from the plan's estimate, which is deliberately slower and includes shopping time. Your function (not the browser) calls it, so only the coordinates of your location and the stops are sent, never your IP address. For production use Amazon Location Service.
-* **The rules fallback is much weaker than the model.** It matches keywords. It is there so the app is never dead, not to replace the model.
+* **The rules fallback is much weaker than the model.** It matches keywords. It is there so the app is never dead, not to replace the model. Its substitutes come from a short hand-written list (`FALLBACK_SUBS` in `ai.py`), so many items get none. Batteries never get one, because it cannot tell what they are for and a different size will not fit.
 * **Neighbor reports are unverified.** Anyone can post one, so a bad actor could mislead. The only protection today is a 6-hour expiry, a per-IP rate limit and input validation.
 * **No accounts and only basic rate limiting.**
 * **Opening hours are read in Pacific time** because the demo region is San José.
@@ -150,7 +155,7 @@ The tests use a scripted fake Bedrock client for the pipeline and a real boto3 c
 | Every model fails but the first few worked before | Throttling. Failures are remembered for 20 seconds, then retried. |
 | Error about an inference profile or `us.` model | Your account may block cross-region profiles. The chain already falls through to in-region Nova models. Or set `BEDROCK_MODEL_IDS` to a model you can use. |
 | `no credentials` in the trace | Export credentials (local) or check the Lambda role (deployed). The app answers with rules in the meantime. |
-| Request takes too long | The Lambda limit is 29 seconds (the API Gateway limit). The model call has a 24 second budget, then the app falls back. |
+| Request takes too long | The Lambda limit is 29 seconds (the API Gateway limit). Each stage may use up to 24 seconds of model time, never more than the request has left minus a 3 second reserve. Each call gets a timeout that fits in the time left, the SDK never retries on its own, and no call or JSON repair starts with under 5 seconds left. Then the app falls back to rules. |
 | The map line is dashed and straight | The routing service could not be reached (the function may have no internet, or the free service is busy). The plan and Directions buttons still work. Try again in a minute. |
 | Map background blank | Map tiles come from OpenStreetMap and need a network. They also need the browser to send a Referer, so the app sets `Referrer-Policy: strict-origin-when-cross-origin`. A privacy extension that strips Referer will blank the tiles. The app shows a notice, and the route, stops and list still work. |
 | `deploy.sh` fails on the bucket | Set `ARTIFACT_BUCKET` to a bucket you own, or check your credentials with `aws sts get-caller-identity`. |

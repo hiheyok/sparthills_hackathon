@@ -24,10 +24,23 @@ Parameters:
   GuardrailId:
     Type: String
     Default: ''
-    Description: Optional Amazon Bedrock Guardrail ID applied to every model call.
+    AllowedPattern: '^[a-z0-9]*$'
+    ConstraintDescription: Use the guardrail ID (for example abc123def456), not its ARN or name.
+    Description: >-
+      Optional Amazon Bedrock Guardrail ID applied to every model call. The function role is
+      allowed bedrock:ApplyGuardrail on this guardrail in BedrockRegion.
   GuardrailVersion:
     Type: String
     Default: DRAFT
+  InventorySnapshotTs:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[0-9]*$'
+    ConstraintDescription: Use Unix time in whole seconds, or leave empty.
+    Description: >-
+      Unix time (seconds) when the demo inventory counts as observed. scripts/deploy.sh sets it to
+      the deploy time so every Lambda container agrees on it, which keeps neighbor reports
+      authoritative across cold starts. Empty means each container uses its own start time.
   ThrottleRatePerSecond:
     Type: Number
     Default: 25
@@ -92,6 +105,14 @@ Resources:
                   # Regions, so the model ARN Region is a wildcard.
                   - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/*'
                   - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*'
+              # Converse calls that carry a guardrail (GUARDRAIL_ID below) are authorized with
+              # bedrock:ApplyGuardrail on that guardrail, in addition to InvokeModel above.
+              - !If
+                - HasGuardrail
+                - Effect: Allow
+                  Action: bedrock:ApplyGuardrail
+                  Resource: !Sub 'arn:${AWS::Partition}:bedrock:${BedrockRegion}:${AWS::AccountId}:guardrail/${GuardrailId}'
+                - !Ref AWS::NoValue
         - PolicyName: ReportsTable
           PolicyDocument:
             Version: '2012-10-17'
@@ -123,6 +144,7 @@ Resources:
           BEDROCK_REGION: !Ref BedrockRegion
           BEDROCK_MODEL_IDS: !Ref BedrockModelIds
           REPORTS_TABLE: !Ref ReportsTable
+          INVENTORY_SNAPSHOT_TS: !Ref InventorySnapshotTs
           GUARDRAIL_ID: !If [HasGuardrail, !Ref GuardrailId, '']
           GUARDRAIL_VERSION: !Ref GuardrailVersion
 

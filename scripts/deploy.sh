@@ -10,6 +10,7 @@
 #   BEDROCK_REGION    region for Bedrock calls        (default = AWS_REGION)
 #   BEDROCK_MODEL_IDS comma-separated model IDs       (default: Claude Haiku 4.5, Nova 2 Lite, ...)
 #   GUARDRAIL_ID      optional Bedrock Guardrail ID
+#   INVENTORY_SNAPSHOT_TS  unix seconds the demo inventory counts as observed (default: now)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -62,6 +63,8 @@ aws s3 cp build/supplyline.zip "s3://$BUCKET/$KEY" --region "$REGION" --only-sho
 OVERRIDES=("CodeBucket=$BUCKET" "CodeKey=$KEY" "BedrockRegion=${BEDROCK_REGION:-$REGION}")
 [ -n "${BEDROCK_MODEL_IDS:-}" ] && OVERRIDES+=("BedrockModelIds=$BEDROCK_MODEL_IDS")
 [ -n "${GUARDRAIL_ID:-}" ] && OVERRIDES+=("GuardrailId=$GUARDRAIL_ID")
+# The demo inventory is stamped with the deploy time, so all containers share one snapshot time.
+OVERRIDES+=("InventorySnapshotTs=${INVENTORY_SNAPSHOT_TS:-$(date +%s)}")
 
 echo "Deploying the stack (first time takes about a minute)..."
 aws cloudformation deploy \

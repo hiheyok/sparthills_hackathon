@@ -23,6 +23,7 @@ Design rules (these are what make it an AI *application* rather than a chat box)
     returns a trace saying which model answered, how long it took and how many
     tokens it used; the UI shows it.
 """
+import contextvars
 import json
 import logging
 import os
@@ -40,9 +41,32 @@ DEFAULT_MODELS = [
     "amazon.nova-lite-v1:0",                         # last-resort in-region model
 ]
 
-_client = None
+_client = None           # a fake injected by tests; otherwise real clients are built on demand
+_clients = {}            # whole-second timeout -> boto3 client
 _bad_until = {}          # model id -> unix time when we may try it again
 _creds_bad_until = 0.0   # no credentials: skip Bedrock entirely for a short while
+
+# A Lambda request has a fixed time (29 s here, and API Gateway cuts off at 30 s). Every Bedrock
+# attempt must fit in what is left of it, with a reserve so the rules fallback and the reply
+# can still go out.
+FALLBACK_RESERVE_S = 3.0   # kept free at the end of the request
+MIN_ATTEMPT_S = 5.0        # never start a call, or a JSON repair, with less time than this
+MAX_ATTEMPT_S = 20.0       # longest a single call may take
+_deadline = contextvars.ContextVar("supplyline_deadline", default=None)   # a time.monotonic() value
+
+
+def set_deadline(remaining_s):
+    """Give the current request `remaining_s` seconds in all (the Lambda context's remaining
+    time). None removes the limit, which local runs and tests use."""
+    _deadline.set(None if remaining_s is None
+                  else time.monotonic() + max(0.0, remaining_s - FALLBACK_RESERVE_S))
+
+
+def _time_left(t0, budget_s):
+    """Seconds this stage may still use: its own budget, or the request deadline if that is sooner."""
+    left = budget_s - (time.monotonic() - t0)
+    deadline = _deadline.get()
+    return left if deadline is None else min(left, deadline - time.monotonic())
 
 
 # ------------------------------------------------------------------ config
@@ -69,19 +93,29 @@ def set_client(client):
     """Test hook: inject a fake bedrock-runtime client and reset health memory."""
     global _client, _creds_bad_until
     _client = client
+    _clients.clear()
     _creds_bad_until = 0.0
     _bad_until.clear()
+    set_deadline(None)
 
 
-def _get_client():
-    global _client
-    if _client is None:
+def _get_client(timeout_s=MAX_ATTEMPT_S):
+    """A bedrock-runtime client whose connect and read timeouts together fit in `timeout_s`.
+    The SDK takes timeouts only when a client is built, so clients are kept per whole second.
+    The SDK itself never retries (total_max_attempts=1): the model chain is the retry policy,
+    and a hidden SDK retry would spend time that this module does not count."""
+    if _client is not None:
+        return _client
+    secs = max(1, min(int(MAX_ATTEMPT_S), int(timeout_s)))
+    if secs not in _clients:
         import boto3
         from botocore.config import Config
-        _client = boto3.client(
+        connect = min(3, max(1, secs // 4))
+        _clients[secs] = boto3.client(
             "bedrock-runtime", region_name=region(),
-            config=Config(connect_timeout=3, read_timeout=20, retries={"max_attempts": 1, "mode": "standard"}))
-    return _client
+            config=Config(connect_timeout=connect, read_timeout=max(1, secs - connect),
+                          retries={"total_max_attempts": 1, "mode": "standard"}))
+    return _clients[secs]
 
 
 # ------------------------------------------------------------ small helpers
@@ -137,7 +171,7 @@ def _text_of(resp):
     return "".join(b["text"] for b in blocks if isinstance(b, dict) and "text" in b)
 
 
-def _converse(model, system, messages, max_tokens, temperature):
+def _converse(model, system, messages, max_tokens, temperature, timeout_s=MAX_ATTEMPT_S):
     kw = {
         "modelId": model,
         "system": [{"text": system}],
@@ -148,7 +182,7 @@ def _converse(model, system, messages, max_tokens, temperature):
     if gid:  # optional Amazon Bedrock Guardrails
         kw["guardrailConfig"] = {"guardrailIdentifier": gid,
                                  "guardrailVersion": os.environ.get("GUARDRAIL_VERSION", "DRAFT")}
-    return _get_client().converse(**kw)
+    return _get_client(timeout_s).converse(**kw)
 
 
 def call_model(stage, system, user, parse, max_tokens=1600, temperature=0.2, budget_s=24.0):
@@ -170,12 +204,13 @@ def call_model(stage, system, user, parse, max_tokens=1600, temperature=0.2, bud
             continue
         messages = [{"role": "user", "content": [{"text": user}]}]
         for attempt in (1, 2):
-            if time.monotonic() - t0 > budget_s:
+            left = _time_left(t0, budget_s)
+            if left < MIN_ATTEMPT_S:   # no attempt on any model can finish now: answer from the rules instead
                 tried.append({"model": model, "error": "time budget used up"})
-                break
+                raise AIUnavailable(tried)
             try:
                 calls += 1
-                resp = _converse(model, system, messages, max_tokens, temperature)
+                resp = _converse(model, system, messages, max_tokens, temperature, left)
             except Exception as exc:  # noqa: BLE001 - classify every SDK/network failure
                 kind = _classify(exc)
                 tried.append({"model": model, "error": _short(exc), "kind": kind})
@@ -525,37 +560,124 @@ def alternatives(gaps, pool, intent):
                                  lambda raw: _alt_validator(set(gap_ids), set(candidates))(extract_json(raw)),
                                  max_tokens=1800)
     except AIUnavailable as exc:
-        alts = fallback_alternatives(gaps, candidates, pool)
+        alts = fallback_alternatives(gaps, pool)
         trace = _fallback_trace("alternatives", exc, t0)
     return alts, trace
 
 
-def fallback_alternatives(gaps, candidates, pool):
+def _sub(item_id, fit, why, how_to_use="", caution=""):
+    return {"item_id": item_id, "fit": fit, "why": why, "how_to_use": how_to_use, "caution": caution}
+
+
+_BATTERIES = "Check which batteries it takes. A different size will not fit."
+# Substitutes the RULES fallback may offer, best first. Hand-written: a substitute is listed only
+# when it does the same job whatever the person is doing. Sharing a tag proves nothing (a
+# hand-crank radio is not a lantern battery, and AA cells do not fit a D-cell lantern), and we
+# do not know what a battery or a charger is for. An item with no entry here gets no rules-based
+# substitute: the need stays open and the person is told so. Caution items may only be offered
+# what their own safe_subs allowlist names; entries here just give those a better explanation.
+FALLBACK_SUBS = {
+    "water_bottled": [
+        _sub("water_filter", "partial", "Makes tap, tank or stream water safe to drink. You still need a water source.",
+             "Fill from the cleanest source you have and filter it before drinking."),
+        _sub("water_tabs", "partial", "Treats tap, tank or stream water so it is safer to drink. You still need a water source.",
+             "Follow the package directions and wait time.")],
+    "water_filter": [_sub("water_tabs", "partial", "Treats water too, but does not take out dirt or grit.",
+                          "Follow the package directions and wait time.")],
+    "water_tabs": [_sub("water_filter", "partial", "Filters water with no waiting time.", "Filter the water before you drink it.")],
+    "food_canned": [
+        _sub("food_meals", "strong", "Shelf-stable food that needs little or no cooking."),
+        _sub("food_bars", "partial", "Ready to eat with no cooking.", caution="Check the label for allergens."),
+        _sub("peanut_butter", "partial", "Ready to eat, with plenty of calories.", caution="Check for allergies first."),
+        _sub("dried_fruit_nuts", "partial", "Ready to eat with no cooking.", caution="Check for allergies first.")],
+    "food_meals": [_sub("food_canned", "strong", "Shelf-stable food that is ready to eat."),
+                   _sub("food_bars", "partial", "Ready to eat with no cooking.", caution="Check the label for allergens.")],
+    "food_bars": [_sub("dried_fruit_nuts", "partial", "Ready to eat with no cooking.", caution="Check for allergies first."),
+                  _sub("peanut_butter", "partial", "Ready to eat, with plenty of calories.", caution="Check for allergies first.")],
+    "peanut_butter": [_sub("food_bars", "partial", "Ready to eat, with plenty of calories.", caution="Check the label for allergens."),
+                      _sub("dried_fruit_nuts", "partial", "Ready to eat with no cooking.", caution="Check for allergies first.")],
+    "dried_fruit_nuts": [_sub("food_bars", "partial", "Ready to eat with no cooking.", caution="Check the label for allergens."),
+                         _sub("peanut_butter", "partial", "Ready to eat, with plenty of calories.", caution="Check for allergies first.")],
+    "flashlight_led": [
+        _sub("headlamp", "strong", "Gives light and leaves both hands free.", caution=_BATTERIES),
+        _sub("lantern_solar_usb", "partial", "Lights a room, and needs no batteries."),
+        _sub("lantern_led_battery", "partial", "Lights a room but cannot be pointed.", caution=_BATTERIES),
+        _sub("glow_sticks", "workaround", "A flame-free light that lasts a few hours, one use only.")],
+    "headlamp": [_sub("flashlight_led", "partial", "Gives light, but you have to hold it.", caution=_BATTERIES),
+                 _sub("lantern_solar_usb", "partial", "Lights a room, and needs no batteries."),
+                 _sub("glow_sticks", "workaround", "A flame-free light that lasts a few hours, one use only.")],
+    "lantern_led_battery": [
+        _sub("lantern_solar_usb", "strong", "Lights a room and needs no batteries."),
+        _sub("flashlight_led", "partial", "Gives light but cannot light a whole room.", caution=_BATTERIES),
+        _sub("headlamp", "partial", "Gives light and leaves both hands free.", caution=_BATTERIES),
+        _sub("glow_sticks", "workaround", "A flame-free light that lasts a few hours, one use only.")],
+    "lantern_solar_usb": [
+        _sub("lantern_led_battery", "partial", "Lights a room.", caution=_BATTERIES),
+        _sub("flashlight_led", "partial", "Gives light but cannot light a whole room.", caution=_BATTERIES),
+        _sub("headlamp", "partial", "Gives light and leaves both hands free.", caution=_BATTERIES)],
+    "glow_sticks": [_sub("flashlight_led", "strong", "Gives light that lasts longer.", caution=_BATTERIES),
+                    _sub("headlamp", "strong", "Gives light and leaves both hands free.", caution=_BATTERIES)],
+    "power_bank": [_sub("power_station", "strong", "Charges phones and other USB devices, and holds more power."),
+                   _sub("car_charger", "workaround", "Charges a phone from a car.",
+                        caution="Charge from a parked car with the engine running outdoors only, never in a closed garage.")],
+    "car_charger": [_sub("power_bank", "strong", "Charges a phone without a car."),
+                    _sub("power_station", "partial", "Charges phones and other USB devices.")],
+    "radio_crank": [_sub("radio_battery", "partial", "Brings news and alerts.", caution="It needs batteries.")],
+    "radio_battery": [_sub("radio_crank", "strong", "Brings news and alerts with no batteries.")],
+    "ice_bag": [_sub("ice_packs", "workaround", "Keeps a cooler cold for a while.",
+                     caution="Only works if the packs are already frozen. With the power out they will not freeze.")],
+    "ice_packs": [_sub("ice_bag", "partial", "Keeps a cooler cold.", caution="Ice melts and leaves water in the cooler.")],
+    "mylar_blanket": [_sub("sleeping_bag", "strong", "Keeps you warm."), _sub("hand_warmers", "partial", "Adds warmth for a few hours.")],
+    "sleeping_bag": [_sub("mylar_blanket", "partial", "Reflects body heat back to you.")],
+    "hand_warmers": [_sub("mylar_blanket", "partial", "Holds in body heat."), _sub("sleeping_bag", "partial", "Keeps you warm.")],
+    "tent": [_sub("tarp", "partial", "Shelter from rain and wind, with some setup."),
+             _sub("plastic_sheeting", "workaround", "Temporary cover from rain and wind.")],
+    "tarp": [_sub("plastic_sheeting", "partial", "Covers a roof or opening, but tears more easily.")],
+    "plastic_sheeting": [_sub("tarp", "strong", "Covers a roof or opening and holds up better.")],
+    "n95_mask": [_sub("respirator_p100", "strong", "Filters smoke particles at least as well.",
+                      caution="It must seal against your face. Facial hair breaks the seal.")],
+    "respirator_p100": [_sub("n95_mask", "partial", "Filters smoke particles, a bit less than a P100.",
+                             caution="It must seal against your face. Facial hair breaks the seal.")],
+    "bandages": [_sub("first_aid_kit", "partial", "Most kits include bandages and gauze.")],
+    "first_aid_kit": [_sub("bandages", "partial", "Covers cuts and scrapes only."),
+                      _sub("antiseptic", "partial", "Cleans cuts and scrapes only.")],
+    "antiseptic": [_sub("first_aid_kit", "partial", "Most kits include antiseptic wipes.")],
+    "propane_1lb": [_sub("food_meals", "workaround", "Ready-to-eat meals avoid the need to use the propane stove.",
+                         "Choose meals marked ready to eat.", "This does not provide fuel for your stove.")],
+    "baby_formula_powder": [_sub("baby_formula_rtf", "partial", "Ready-to-feed formula needs no water to mix.",
+                                caution="Ask the pediatrician before switching types; confirm package sizes and the amount needed.")],
+    "baby_formula_rtf": [_sub("baby_formula_powder", "partial", "Powdered formula needs clean, safe water to mix.",
+                             caution="Ask the pediatrician before switching types; confirm package sizes and the amount needed.")],
+}
+
+
+def fallback_alternatives(gaps, pool):
+    """Rules-only substitutes: FALLBACK_SUBS for ordinary items, the item's own safe_subs
+    allowlist for caution items, nothing for prescriptions. Only items in stock nearby
+    (`pool`) qualify. No entry means no substitute and the need stays open."""
+    gap_ids = {g["item_id"] for g in gaps}
     out = []
     for g in gaps:
-        cat = CATALOG[g["item_id"]]
-        if cat["policy"] == "none":
-            out.append({"for_item": g["item_id"], "verdict": "no_safe_substitute", "options": [],
-                        "no_purchase_tips": [], "escalate": cat.get("escalate") or None})
-            continue
-        want = set()
-        for tg in cat["tags"]:
-            want |= {tg} | RELATED_TAGS.get(tg, set())
-        pool_ids = candidates
-        if cat["policy"] == "caution":  # curated allowlist only, no tag guessing
-            pool_ids = [k for k in candidates if k in (cat.get("safe_subs") or [])]
-        scored = sorted(((len(want & set(CATALOG[k]["tags"])), -pool[k]["dist_km"], k) for k in pool_ids), reverse=True)
+        gid = g["item_id"]
+        cat = CATALOG[gid]
         options = []
-        for score, _, k in scored:
-            if (score == 0 and cat["policy"] != "caution") or len(options) == 3:
-                break
-            c = CATALOG[k]
-            shared = sorted(want & set(c["tags"]))
-            options.append({"item_id": k, "fit": "partial",
-                            "why": ("Serves a similar purpose (" + ", ".join(shared) + ")." if shared else "Approved alternative for this item."),
-                            "how_to_use": "",
-                            "caution": c["note"] if c["policy"] != "free" else ("Ask a professional if unsure." if cat["policy"] == "caution" else "")})
-        out.append({"for_item": g["item_id"], "verdict": "substitutes_available" if options else "none_found",
+        if cat["policy"] != "none":
+            curated = {s["item_id"]: s for s in FALLBACK_SUBS.get(gid, [])}
+            if cat["policy"] == "caution":
+                ranked = [curated.get(k) or _sub(k, "partial", "Approved alternative for this item.")
+                          for k in cat.get("safe_subs") or []]
+            else:
+                ranked = list(curated.values())
+            for s in ranked:
+                k = s["item_id"]
+                if k in pool and k not in gap_ids and CATALOG[k]["policy"] != "none":
+                    caution = s["caution"] or CATALOG[k]["note"] or ("Ask a professional if unsure." if cat["policy"] == "caution" else "")
+                    options.append({**s, "caution": caution})
+                    if len(options) == 3:
+                        break
+        out.append({"for_item": gid,
+                    "verdict": ("no_safe_substitute" if cat["policy"] == "none"
+                                else "substitutes_available" if options else "none_found"),
                     "options": options, "no_purchase_tips": [], "escalate": cat.get("escalate") or None})
     return out
 
@@ -568,6 +690,8 @@ Voice: calm, direct, plain words (about 7th-grade reading level), sentence case,
 Safety first: if situation.urgent_safety.flag is true, the FIRST safety note must tell them to get safe and call 911 before driving for supplies. Add 1 to 3 more safety notes that are well established for this disaster and these items (for example: wildfire smoke -> N95 masks help, keep windows closed; generators and charcoal outdoors only; no candles if you smell gas; keep insulin cool but never frozen). No medication doses or chemical mixing ratios.
 If an item was swapped for an alternative, say so in that stop's text and what to check (ask the pharmacist, confirm the stove type, and so on).
 If items could not be found, use "if_stuck" for what to do next (call ahead, ask staff for alternatives, dial 211), at most 3 short bullets.
+If PLAN.partly_available lists an item, the route cannot supply the full amount: say how many are still missing in the summary, and never say everything is covered. Use quantity_here for how many to buy at that stop.
+If PLAN.quantity_unconfirmed lists an item, preserve the original requested quantity and tell the person to confirm equivalent package amounts with the store. Those substitute suggestions are not in the route and do not cover the need. Never invent a quantity conversion.
 
 Respond with ONE JSON object and nothing else:
 {"headline":"max 90 characters: what to do first","summary":"2 sentences at most","steps":[{"stop":1,"say":"1-2 sentences: what to get here and anything to ask or check"}],"safety_notes":["..."],"if_stuck":["..."]}
@@ -580,6 +704,7 @@ def plan_for_prompt(plan, intent):
         "minutes_to_get_there": s["leg_min"], "arrive": s["arrive"], "hours": s["open_note"],
         "store_note": s["store"]["store_note"],
         "get": [{"item": i["name"], "person_called_it": i["label"], "swapped_in_for": i["replaces_name"],
+                 "quantity_here": i["qty"], "quantity_needed": i["qty_needed"],
                  "low_stock": i["low"], "info_may_be_stale": i["confidence"] == "stale",
                  "neighbor_reported": i["source"] == "community"} for i in s["items"]],
     } for s in plan["route"]["stops"]]
@@ -587,7 +712,12 @@ def plan_for_prompt(plan, intent):
         "situation": {"disaster": intent.get("disaster"), "household": intent.get("household"),
                       "urgent_safety": intent.get("urgent_safety")},
         "stops": stops,
-        "not_found_nearby": [{"item": u["name"], "priority": u["priority"]} for u in plan["unresolved"]],
+        "not_found_nearby": [{"item": u["name"], "priority": u["priority"]} for u in plan["unresolved"]
+                             if u.get("reason") != "quantity_unverified"],
+        "quantity_unconfirmed": [{"item": u["name"], "requested": u["qty"], "note": u["quantity_note"]}
+                                 for u in plan["unresolved"] if u.get("reason") == "quantity_unverified"],
+        "partly_available": [{"item": s["name"], "needed": s["qty"], "found": s["found"], "still_missing": s["missing"],
+                              "priority": s["priority"]} for s in plan.get("shortfalls", [])],
         "no_substitute_policy": [a["for_name"] for a in plan["alternatives"] if a["policy"] == "none"],
     }
 
@@ -626,12 +756,20 @@ GENERIC_SAFETY = {
 
 def fallback_brief(plan, intent):
     stops = plan["route"]["stops"]
+    checks = [u["quantity_note"] for u in plan["unresolved"] if u.get("reason") == "quantity_unverified"]
+    missing = [u for u in plan["unresolved"] if u.get("reason") != "quantity_unverified"]
     if stops:
         first = stops[0]
         headline = f"Start at {first['store']['name']}, about {first['leg_min']} minutes away."
+        short = [f"{s['name'].lower()} ({s['found']} of {s['qty']})" for s in plan.get("shortfalls", [])]
+        problems = ((f"{len(missing)} item(s) could not be found nearby. " if missing else "")
+                    + ("Not enough in stock for the full amount: " + ", ".join(short) + ". " if short else "")
+                    + " ".join(checks))
         summary = (f"{len(stops)} stop{'s' if len(stops) != 1 else ''}, about {plan['route']['total_min']} minutes in all. "
-                   + (f"{len(plan['unresolved'])} item(s) could not be found nearby." if plan["unresolved"] else
-                      "Everything on your list is covered."))
+                   + (problems.strip() or "Everything on your list is covered."))
+    elif checks:
+        headline = "Confirm substitute quantities before shopping."
+        summary = " ".join(checks) + (f" {len(missing)} other item(s) could not be found nearby." if missing else "")
     else:
         headline = "No open store near you has these items right now."
         summary = "Try a wider search area, or see the alternatives below."
