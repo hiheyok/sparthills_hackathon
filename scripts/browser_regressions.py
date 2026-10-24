@@ -14,7 +14,6 @@ import threading
 import time
 import traceback
 import unittest
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, expect
@@ -25,7 +24,7 @@ sys.path.insert(0, str(ROOT / 'app'))
 os.environ['AI_MODE'] = 'off'
 os.environ['ROAD_ROUTING'] = 'off'
 os.environ.pop('REPORTS_TABLE', None)
-from local_server import Local
+from local_server import Local, LocalHTTPServer
 import handler
 import store
 
@@ -76,7 +75,7 @@ def annotation(test, err):
     calls = ', '.join(f"{path}:{(body or {}).get('mode', '-')}" for path, body in getattr(test, 'calls', [])[-16:])
     reason = ' '.join(traceback.format_exception_only(err[0], err[1])).strip()
     reason = reason.split('\nAria snapshot')[0].strip()                  # Playwright appends the whole page tree
-    body = f'{reason[:700]}\npage: {state[:900]}\nrequests: {calls[:400]}\npage errors: {str(getattr(test, "errors", ""))[:300]}'
+    body = f'{reason[:700]}\npage: {state[:900]}\nrequests: {calls[:400]}\nnetwork failures: {str(getattr(test, "network_failures", ""))[:500]}\npage errors: {str(getattr(test, "errors", ""))[:300]}'
     body = body.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
     ident = test.id()
     title = ident.rsplit('.', 1)[-1] if ' ' not in ident else ident        # class-level errors are named "setUpClass (...)"
@@ -141,7 +140,7 @@ class BrowserRegressions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         store.set_store(store.LocalReportStore())
-        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), QuietLocal)
+        cls.server = LocalHTTPServer(('127.0.0.1', 0), QuietLocal)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.url = f'http://127.0.0.1:{cls.server.server_port}'
@@ -164,6 +163,9 @@ class BrowserRegressions(unittest.TestCase):
         self.page.set_default_timeout(5000)
         self.page.clock.set_fixed_time(datetime.datetime(2026, 10, 23, 17, tzinfo=datetime.timezone.utc))
         self.errors, self.searches, self.paths, self.calls = [], [], [], []
+        self.network_failures = []
+        self.page.on('requestfailed', lambda req: self.network_failures.append(
+            f'{req.method} {req.url} {req.failure}') if req.url.startswith(self.url) else None)
         self.page.on('request', lambda req: self.calls.append((req.url.split('/api/')[1].split('?')[0], req.post_data_json))
                      if '/api/' in req.url and req.method == 'POST' else None)
         self.page.on('pageerror', lambda err: self.errors.append(str(err)))

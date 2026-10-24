@@ -22,6 +22,13 @@ sys.path.insert(0, str(ROOT / "app"))
 os.environ.setdefault("REPORTS_FILE", str(ROOT / "local_data" / "reports.json"))
 
 
+class LocalHTTPServer(ThreadingHTTPServer):
+    # Python 3.12 defaults to only five pending connections. Chromium opens
+    # connections in bursts for assets and API calls; Windows can refuse them
+    # before the serving thread gets a chance to accept the queued sockets.
+    request_queue_size = 128
+
+
 class Local(BaseHTTPRequestHandler):
     def _run(self, method):
         import handler
@@ -91,7 +98,7 @@ def main():
     print("  models:  " + ", ".join(st["models"]))
     if args.ai == "off":
         print("  (rules-only fallback: no AWS calls will be made)")
-    ThreadingHTTPServer(("127.0.0.1", args.port), Local).serve_forever()
+    LocalHTTPServer(("127.0.0.1", args.port), Local).serve_forever()
 
 
 if __name__ == "__main__":
