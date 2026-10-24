@@ -54,6 +54,13 @@ SHOPPING_MIN = 8           # time spent inside each stop
 PRIORITY_WEIGHT = {1: 5, 2: 3, 3: 1}      # how much covering an item is worth when choosing stops
 URGENCY_WEIGHT = {1: 3.0, 2: 1.0, 3: 0.0}  # how much waiting for an item hurts when ordering stops
 BUNDLE_BONUS = 0.6         # per extra distinct item a store covers: reward one-stop bundling
+# Extra "minutes" by place type, reflecting how likely you can actually get an item there in an
+# emergency. 0 = a store you can buy from (first choice). Relief places are fallbacks, ordered by
+# how reliably they hand out supplies: supply/distribution points > food banks > shelters > cooling
+# and charging centers (mainly a place to cool off / charge, least likely to stock what you need).
+ACQUISITION_PENALTY = {
+    "relief_site": 6, "food_bank": 10, "shelter": 16, "cooling_center": 24,
+}
 
 
 # ---------------------------------------------------------------- time
@@ -169,6 +176,12 @@ def search_item(item_id, qty, lat, lng, radius_km, now_min, reports, now_ts, lim
         penalty = {"fresh": 0, "recent": 2, "stale": 10}[view["confidence"]]
         penalty += 5 if view["short"] else 0
         penalty += 2 if s["status"] == "limited" else 0
+        # Rank by how likely you can actually GET the item there in a pinch. Stores (you buy it) are
+        # the first choice; supply/distribution points are a strong fallback; food banks reliably
+        # give basics; shelters have some; cooling/charging centers are mainly for cooling off, so
+        # least likely to stock what you came for. This is added as extra "minutes" so a store that
+        # is reasonably close is preferred, while a clearly-closer relief place can still win.
+        penalty += ACQUISITION_PENALTY.get(s["type"], 0)
         view["score"] = eta + penalty
         cands.append(view)
     cands.sort(key=lambda v: (v["score"], v["dist_km"]))
@@ -373,13 +386,17 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4, mode=DEFAULT_MOD
                 # It never overrides stock, hours or safety (those already shaped `covered`); it only
                 # breaks the tie between a near one-item store and a slightly farther all-in-one store.
                 gain *= 1.0 + BUNDLE_BONUS * (len(covered) - 1)
+                # Weigh a stop by how likely you can actually get the item there (see
+                # ACQUISITION_PENALTY): a store is preferred over a relief place unless the relief
+                # place is clearly closer, and among relief places the more reliable ones win.
+                acq = ACQUISITION_PENALTY.get(STORE_BY_ID[sid]["type"], 0)
                 for pos in range(len(order) + 1):
                     cand = order[:pos] + [sid] + order[pos:]
                     legs = _simulate(cand, lat, lng, now_min, reports, mode)
                     if legs is None:
                         continue
                     added = sum(l["min"] for l in legs) - base_min + SHOPPING_MIN
-                    value = gain / (added + 6.0)
+                    value = gain / (added + acq + 6.0)
                     if best is None or value > best[0]:
                         best = (value, cand, sid)
             if best is None:
