@@ -1,6 +1,8 @@
 """Road routing: the OSRM client (network mocked) and the /api/route endpoint."""
 import json
 import os
+import socket
+import ssl
 import sys
 import unittest
 import urllib.error
@@ -44,17 +46,33 @@ class RoadsClient(unittest.TestCase):
             roads.fetch_route([A, B])
         self.assertEqual(m.call_count, 1)
 
+    def test_cache_limits_total_geometry_size(self):
+        with mock.patch.object(roads, 'CACHE_MAX_VERTICES', 5), mock.patch.object(roads, '_open', return_value=osrm_ok()):
+            roads.fetch_route([A, B])
+            roads.fetch_route([A, C])
+        self.assertEqual(len(roads._cache), 1)
+        self.assertLessEqual(sum(len(v[1]['path']) for v in roads._cache.values()), 5)
+
     def test_network_errors_become_roads_unavailable(self):
         for exc in (urllib.error.URLError("down"), TimeoutError("slow"), ConnectionResetError()):
             with mock.patch.object(roads, "_open", side_effect=exc):
                 with self.assertRaises(roads.RoadsUnavailable):
                     roads.fetch_route([A, B])
 
+    def test_transient_failure_retries_and_returns_street_geometry(self):
+        with mock.patch.object(roads, "_open", side_effect=[TimeoutError("slow"), osrm_ok()]) as m:
+            r = roads.fetch_route([A, B])
+        self.assertEqual(m.call_count, 2)
+        self.assertEqual(r["path"][1], [37.34, -121.9])
+
     def test_bad_answers_become_roads_unavailable(self):
-        bad = [b"not json", b"{}", json.dumps({"code": "NoRoute"}).encode(),
+        bad = [b"not json", b"{}", b"[]", b"null", json.dumps({"code": "NoRoute"}).encode(),
                json.dumps({"code": "Ok", "routes": []}).encode(),
                json.dumps({"code": "Ok", "routes": [{"geometry": {}}]}).encode(),
-               osrm_ok(coords=[[-121.8, 37.3]])]            # one point is not a route
+               osrm_ok(coords=[[-121.8, 37.3]]),            # one point is not a route
+               osrm_ok(coords=[[float('nan'), 37], [-121, 38]]),
+               osrm_ok(coords=[[-121, 91], [-121, 38]]),
+               osrm_ok(duration=float('inf')), osrm_ok(distance=-1)]
         for raw in bad:
             roads._cache.clear()
             with mock.patch.object(roads, "_open", return_value=raw):
@@ -68,12 +86,17 @@ class RoadsClient(unittest.TestCase):
                 roads.fetch_route([A, B])
         m.assert_not_called()
 
-    def test_long_paths_are_thinned_but_keep_both_ends(self):
-        path = [[37.0 + i * 1e-5, -121.0] for i in range(10000)]
-        thin = roads._thin(path)
-        self.assertLessEqual(len(thin), roads.MAX_PATH_POINTS)
-        self.assertEqual(thin[0], path[0])
-        self.assertEqual(thin[-1], path[-1])
+    def test_long_street_paths_keep_all_bends(self):
+        coords = [[-121.0, 37.0 + i * 1e-5] for i in range(10000)]
+        coords[3][0] = -121.001  # a short bend skipped by the old regular sampling
+        with mock.patch.object(roads, "_open", return_value=osrm_ok(coords=coords)):
+            path = roads.fetch_route([A, B])["path"]
+        self.assertEqual(path, [[lat, lng] for lng, lat in coords])
+
+    def test_oversized_geometry_is_rejected(self):
+        with mock.patch.object(roads, "_open", return_value=osrm_ok(coords=[[-121, 37]] * (roads.MAX_PATH_POINTS + 1))):
+            with self.assertRaises(roads.RoadsUnavailable):
+                roads.fetch_route([A, B])
 
 
 class RouteEndpoint(unittest.TestCase):
@@ -105,6 +128,30 @@ class RouteEndpoint(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(body["available"])
         self.assertTrue(body["reason"])
+
+    def test_specific_connection_failures_reach_the_browser_without_private_details(self):
+        cases = [
+            (urllib.error.URLError(ssl.SSLCertVerificationError(1, 'secret proxy detail')), 'tls_certificate', 'certificate'),
+            (urllib.error.URLError(socket.gaierror(-1, 'secret host')), 'dns', 'DNS'),
+            (TimeoutError('secret route'), 'timeout', 'timed out'),
+            (urllib.error.HTTPError('https://secret/', 407, 'secret credential', {}, None), 'proxy_auth', 'proxy'),
+            (urllib.error.HTTPError('https://secret/', 429, 'secret', {}, None), 'rate_limited', 'busy'),
+        ]
+        for failure, code, expected in cases:
+            with self.subTest(code=code), mock.patch.object(roads, '_open', side_effect=failure):
+                status, body = self.post(self.pts(A, B))
+            self.assertEqual(status, 200)
+            self.assertFalse(body['available'])
+            self.assertEqual(body['code'], code)
+            self.assertIn(expected, body['reason'])
+            self.assertNotIn('secret', json.dumps(body))
+
+    def test_disabled_routing_explains_how_to_enable_it(self):
+        with mock.patch.dict(os.environ, {'ROAD_ROUTING': 'off'}):
+            status, body = self.post(self.pts(A, B))
+        self.assertEqual(status, 200)
+        self.assertEqual(body['code'], 'disabled')
+        self.assertIn('ROAD_ROUTING=on', body['reason'])
 
     def test_input_is_validated_before_any_network_call(self):
         bad = [

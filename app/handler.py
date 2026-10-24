@@ -262,7 +262,7 @@ def api_route(d):
     try:
         return {"available": True, **roads.fetch_route(pts)}
     except roads.RoadsUnavailable as e:
-        return {"available": False, "reason": str(e)}
+        return {"available": False, "reason": str(e), "code": e.code}
 
 
 def api_health(_d):
@@ -277,7 +277,7 @@ POST_ROUTES = {
 GET_ROUTES = {"/api/meta": api_meta, "/api/health": api_health}
 STATIC_ALIASES = {"/": "index.html", "/index.html": "index.html", "/sw.js": "sw.js",
                   "/manifest.webmanifest": "manifest.webmanifest"}
-NO_CACHE = {"index.html", "sw.js", "manifest.webmanifest"}
+NO_CACHE = {"index.html", "sw.js", "manifest.webmanifest", "app.js", "styles.css"}
 
 
 def _static(path):
