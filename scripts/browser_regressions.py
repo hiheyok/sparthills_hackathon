@@ -298,6 +298,9 @@ class BrowserRegressions(unittest.TestCase):
         expect(self.page.locator('.where-line').first).to_contain_text('walk')
         expect(self.page.locator('#planTitle')).to_contain_text('on foot')
         expect(self.page.locator('#mapNote')).to_contain_text('Walking route:')
+        # the walking server's usage policy asks for the OpenStreetMap credit and a fix-the-map link wherever its routes show
+        expect(self.page.locator('#mapNote a')).to_have_attribute('href', 'https://www.openstreetmap.org/fixthemap')
+        expect(self.page.locator('.leaflet-control-attribution a[href="https://www.openstreetmap.org/copyright"]')).to_be_attached()
         line = self.page.locator('#map path[stroke-width="5"]')
         expect(line).to_have_count(1)
         expect(line).to_have_attribute('stroke', '#0b6e4c')
