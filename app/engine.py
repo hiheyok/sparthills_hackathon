@@ -53,6 +53,7 @@ STATUS_TO_Q = {"in_stock": 5, "low": 1, "out": 0}
 SHOPPING_MIN = 8           # time spent inside each stop
 PRIORITY_WEIGHT = {1: 5, 2: 3, 3: 1}      # how much covering an item is worth when choosing stops
 URGENCY_WEIGHT = {1: 3.0, 2: 1.0, 3: 0.0}  # how much waiting for an item hurts when ordering stops
+BUNDLE_BONUS = 0.6         # per extra distinct item a store covers: reward one-stop bundling
 
 
 # ---------------------------------------------------------------- time
@@ -355,10 +356,17 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4, mode=DEFAULT_MOD
             for sid, keys in store_keys.items():
                 if sid in order:
                     continue
+                covered = [k for k in keys if left[k] > 0]
                 gain = sum(PRIORITY_WEIGHT.get(by_key[k]["priority"], 3) * min(left[k], stock[(sid, k)]) / by_key[k]["qty"]
-                           for k in keys if left[k] > 0)
+                           for k in covered)
                 if gain <= 0:
                     continue
+                # Prefer bundling: one stop that supplies several of the still-missing items beats
+                # several single-item stops, even a little farther away. The bonus grows with the
+                # number of distinct items covered here, so a store that has everything wins outright.
+                # It never overrides stock, hours or safety (those already shaped `covered`); it only
+                # breaks the tie between a near one-item store and a slightly farther all-in-one store.
+                gain *= 1.0 + BUNDLE_BONUS * (len(covered) - 1)
                 for pos in range(len(order) + 1):
                     cand = order[:pos] + [sid] + order[pos:]
                     legs = _simulate(cand, lat, lng, now_min, reports, mode)

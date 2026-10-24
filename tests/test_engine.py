@@ -285,6 +285,69 @@ class EngineTests(unittest.TestCase):
         self.assertIn("instead of Infant formula (powder)", text)
 
 
+class BundlingTests(unittest.TestCase):
+    """With several items, prefer one store that stocks them all; otherwise bundle as many
+    as possible per stop; if an item is nowhere, fall back to the usual gap behavior."""
+
+    def setUp(self):
+        self.now = time.time()
+
+    @staticmethod
+    def shop(sid, dlat, inv):
+        return {"id": sid, "name": sid, "type": "supermarket", "hood": "x",
+                "lat": DOWNTOWN[0] + dlat, "lng": DOWNTOWN[1],
+                "hours": {"always": True}, "status": "open", "note": "",
+                "inv": {k: {"q": q, "age": 5} for k, q in inv.items()}}
+
+    def only(self, *shops):
+        stack = contextlib.ExitStack()
+        stack.enter_context(unittest.mock.patch.object(e, "STORES", list(shops)))
+        stack.enter_context(unittest.mock.patch.object(e, "STORE_BY_ID", {s["id"]: s for s in shops}))
+        return stack
+
+    def plan(self, items):
+        needs = [need(i) for i in items]
+        return e.build_plan(needs, [], *DOWNTOWN, 8, MORNING, {}, self.now)
+
+    def test_one_store_with_everything_is_a_single_stop(self):
+        # A nearer store has only one item; a slightly farther store has all three.
+        # Bundling should win: one stop at the all-in-one store, not three scattered stops.
+        near_one = self.shop("near_one", 0.002, {"insulin": 9})
+        all_three = self.shop("all_three", 0.02, {"insulin": 9, "diapers": 9, "food_canned": 9})
+        with self.only(near_one, all_three):
+            plan = self.plan(["insulin", "diapers", "food_canned"])
+        self.assertEqual(len(plan["route"]["stops"]), 1)
+        stop = plan["route"]["stops"][0]
+        self.assertEqual(stop["store"]["id"], "all_three")
+        self.assertEqual(sorted(i["item_id"] for i in stop["items"]),
+                         ["diapers", "food_canned", "insulin"])
+        self.assertEqual(plan["unresolved"], [])
+
+    def test_bundle_as_much_as_possible_when_no_single_store_has_all(self):
+        # No store has all three; two stores each carry two of them (one overlapping).
+        # The plan should cover everything in two stops, not three.
+        a = self.shop("a", 0.004, {"insulin": 9, "diapers": 9})
+        b = self.shop("b", 0.02, {"diapers": 9, "food_canned": 9})
+        with self.only(a, b):
+            plan = self.plan(["insulin", "diapers", "food_canned"])
+        placed = {i["item_id"] for s in plan["route"]["stops"] for i in s["items"]}
+        self.assertEqual(placed, {"insulin", "diapers", "food_canned"})
+        self.assertEqual(len(plan["route"]["stops"]), 2)
+        self.assertEqual(plan["unresolved"], [])
+
+    def test_item_available_nowhere_falls_back_to_the_usual_gap(self):
+        # One store bundles two items; the third is stocked nowhere, so it stays unresolved
+        # exactly as before, while the two that exist are still bundled into one stop.
+        only_two = self.shop("only_two", 0.01, {"insulin": 9, "diapers": 9})
+        with self.only(only_two):
+            plan = self.plan(["insulin", "diapers", "food_canned"])
+        self.assertEqual(len(plan["route"]["stops"]), 1)
+        stop = plan["route"]["stops"][0]
+        self.assertEqual(sorted(i["item_id"] for i in stop["items"]), ["diapers", "insulin"])
+        self.assertEqual([(u["item_id"], u["reason"]) for u in plan["unresolved"]],
+                         [("food_canned", "no_stock")])
+
+
 class TravelModeTests(unittest.TestCase):
     """Driving and walking are two plans over the same stores: different range, different times,
     and a store that is open when a car arrives can be closed by the time a walker does."""
