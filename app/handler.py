@@ -18,7 +18,7 @@ import engine
 import roads
 import store
 from engine import CATALOG, CATALOG_LIST, PLACES, STORE_BY_ID, STORES
-from geo import haversine_km
+from geo import DEFAULT_MODE, MODES, haversine_km
 
 log = logging.getLogger("supplyline")
 logging.getLogger().setLevel(logging.INFO)
@@ -88,6 +88,16 @@ def _json_body(event):
     if not isinstance(d, dict):
         raise HttpError(400, "The request body must be a JSON object.")
     return d
+
+
+def _mode(d):
+    """How the person is getting there: "driving" (the default) or "walking"."""
+    m = d.get("mode")
+    if m is None or m == "":
+        return DEFAULT_MODE
+    if not isinstance(m, str) or m not in MODES:
+        raise HttpError(400, "mode must be driving or walking.")
+    return m
 
 
 def _loc(d):
@@ -239,12 +249,14 @@ def api_report(d):
     return {"ok": True, "expires_in_hours": store.REPORT_TTL_S // 3600}
 
 
-MAX_LEG_KM = 80   # the search radius is at most 50 km, so a longer hop is not a real plan
+MAX_LEG_KM = 80        # the search radius is at most 50 km, so a longer hop is not a real plan
+MAX_WALK_LEG_KM = 15   # walking plans stay within a few km; a longer walk is not a real plan either
 
 
 def api_route(d):
-    """The fastest road route through the plan's points, in the order given.
+    """The fastest route through the plan's points, in the order given, by car or on foot.
     Never an error for a routing outage: the browser falls back to a straight line."""
+    mode = _mode(d)
     raw = d.get("points")
     if not isinstance(raw, list) or not (2 <= len(raw) <= roads.MAX_POINTS):
         raise HttpError(400, f"Send between 2 and {roads.MAX_POINTS} points.")
@@ -257,12 +269,13 @@ def api_route(d):
         if not (math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180):
             raise HttpError(400, "A point is out of range.")
         pts.append((lat, lng))
-    if any(haversine_km(a[0], a[1], b[0], b[1]) > MAX_LEG_KM for a, b in zip(pts, pts[1:])):
+    limit = MAX_WALK_LEG_KM if mode == "walking" else MAX_LEG_KM
+    if any(haversine_km(a[0], a[1], b[0], b[1]) > limit for a, b in zip(pts, pts[1:])):
         raise HttpError(400, "Those points are too far apart.")
     try:
-        return {"available": True, **roads.fetch_route(pts)}
+        return {"available": True, **roads.fetch_route(pts, mode)}
     except roads.RoadsUnavailable as e:
-        return {"available": False, "reason": str(e), "code": e.code}
+        return {"available": False, "mode": mode, "reason": str(e), "code": e.code}
 
 
 def api_health(_d):
