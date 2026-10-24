@@ -16,10 +16,13 @@ import json
 import logging
 import math
 import os
+import socket
+import ssl
 import time
 import urllib.error
-import urllib.request
 from collections import OrderedDict
+
+import road_transport
 
 log = logging.getLogger("supplyline")
 
@@ -38,12 +41,36 @@ _cache = OrderedDict()
 class RoadsUnavailable(Exception):
     """The routing service could not give us a road route. The message is safe to show."""
 
+    def __init__(self, message, code="unavailable"):
+        super().__init__(message)
+        self.code = code
+
 
 def _open(url, timeout):
     """The only network call. Tests replace this."""
-    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=timeout) as r:   # noqa: S310 (fixed https host, numbers only)
-        return r.read(3_000_000)
+    return road_transport.fetch(url, timeout, USER_AGENT)
+
+
+def _failure(exc):
+    """Safe diagnoses only: raw exceptions can include URLs and proxy secrets."""
+    reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+    if isinstance(reason, ssl.SSLCertVerificationError):
+        return RoadsUnavailable("The server could not verify the routing service's HTTPS certificate. Check the computer's date and trusted certificates or network proxy.", "tls_certificate")
+    if isinstance(reason, ssl.SSLError):
+        return RoadsUnavailable("The server could not establish a secure connection to the routing service. Check Python, Windows updates and your network proxy.", "tls_connection")
+    if isinstance(reason, (TimeoutError, socket.timeout)):
+        return RoadsUnavailable("The routing service timed out. Check the server's internet connection and retry.", "timeout")
+    if isinstance(reason, socket.gaierror):
+        return RoadsUnavailable("The server could not find the routing service's internet address. Check its DNS or proxy settings.", "dns")
+    if isinstance(exc, urllib.error.HTTPError):
+        if exc.code == 407:
+            return RoadsUnavailable("The server's network proxy requires authentication before it can reach the routing service.", "proxy_auth")
+        if exc.code == 429:
+            return RoadsUnavailable("The routing service is busy. Wait a minute before retrying.", "rate_limited")
+        return RoadsUnavailable(f"The routing service returned HTTP {exc.code}. Check the server's network access or retry later.", "http_error")
+    if isinstance(exc, ValueError):
+        return RoadsUnavailable("The routing service returned an unreadable response. A network proxy may be intercepting the request.", "invalid_response")
+    return RoadsUnavailable("The server could not connect to the routing service. Check its internet connection, firewall or proxy settings.", "connection")
 
 
 def _number(value):
@@ -62,7 +89,7 @@ def _measure(value, scale, precision):
 def fetch_route(points):
     """points: list of (lat, lng), start first. Returns the fastest driving route through them in order."""
     if os.environ.get("ROAD_ROUTING", "on").lower() == "off":
-        raise RoadsUnavailable("Road directions are turned off.")
+        raise RoadsUnavailable("Road directions are turned off on the server. Restart it with ROAD_ROUTING=on.", "disabled")
     key = tuple((round(lat, 5), round(lng, 5)) for lat, lng in points)
     now = time.time()
     hit = _cache.get(key)
@@ -78,12 +105,13 @@ def fetch_route(points):
             data = json.loads(_open(url, TIMEOUT_S))
             break
         except (urllib.error.URLError, OSError, ValueError) as e:
-            log.warning("road routing unavailable: %s", e)
-            if attempt:
-                raise RoadsUnavailable("Road directions are not available right now.") from e
+            failure = _failure(e)
+            log.warning("road routing unavailable (%s): %s", failure.code, failure)
+            if attempt or failure.code in {"tls_certificate", "tls_connection", "proxy_auth", "rate_limited"}:
+                raise failure from e
     try:
         if data.get("code") != "Ok":
-            raise RoadsUnavailable("No road route was found between those places.")
+            raise RoadsUnavailable("No road route was found between those places.", "no_route")
         r = data["routes"][0]
         geometry = r["geometry"]
         coords = geometry["coordinates"]
@@ -103,8 +131,8 @@ def fetch_route(points):
     except RoadsUnavailable:
         raise
     except (AttributeError, KeyError, IndexError, TypeError, ValueError) as e:
-        log.warning("unexpected road routing answer: %s", e)
-        raise RoadsUnavailable("Road directions are not available right now.")
+        log.warning("road routing unavailable (invalid_geometry)")
+        raise RoadsUnavailable("The routing service returned an invalid road path. Retry road routing.", "invalid_geometry") from e
     _cache[key] = (now, result)
     while len(_cache) > CACHE_MAX or sum(len(v[1]["path"]) for v in _cache.values()) > CACHE_MAX_VERTICES:
         _cache.popitem(last=False)

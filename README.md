@@ -50,6 +50,20 @@ python3 local_server.py --ai off      # rules only, no AWS needed
 
 Type a request and press **Enter** to search (Shift+Enter adds a new line). The map background and the road route need an internet connection. Without one, the app still works and the map shows a straight dashed line.
 
+On Windows (PowerShell or Command Prompt):
+
+```powershell
+py local_server.py --ai off --roads on
+```
+
+`--ai off` disables AI only. `--roads on` explicitly enables street routing even if `ROAD_ROUTING=off` was left in the environment. Restart the server after pulling code changes. If the route stays straight, the message below the map now gives the server's reason. Check road connectivity separately with:
+
+```powershell
+py local_server.py --roads on --check-routing
+```
+
+This checks a fixed San Jose demo route, prints the number of street vertices on success, and exits with a nonzero status on failure. On Windows, a failed Python connection also tries Windows PowerShell's native HTTPS stack with certificate verification enabled. This can recover from differences in certificate-chain or proxy handling; it cannot override a network firewall or routing-service outage.
+
 To use real Amazon Bedrock locally, put your AWS credentials in the environment first (on the event page click **Get AWS CLI credentials** and paste the exports), install boto3 (`pip install boto3`), then:
 
 ```bash
@@ -127,6 +141,7 @@ app/
   engine.py      Search, store hours, route planning, safety policy enforcement (no AI)
   ai.py          Amazon Bedrock stages, validation, model fallback, rules fallback
   roads.py       Road route for the map (public OSRM service, fails soft)
+  road_transport.py  HTTPS fetch, with a native Windows fallback for connection failures
   store.py       Neighbor reports (DynamoDB, or in memory locally)
   geo.py         Distance and travel time
   data/          catalog.json, stores.json, places.json (generated)
@@ -155,6 +170,8 @@ python3 scripts/browser_regressions.py
 ```
 
 This starts an isolated local server and Chrome session. It checks Enter and Shift+Enter, mobile search events, delayed location loading, location selection, saved plans, road geometry and retry, stale route responses, responsive layout, and offline cache updates. Routing is mocked and AI is disabled. Alternatively, run `playwright install chromium` and set `BROWSER_CHANNEL=chromium`.
+
+GitHub Actions runs the backend and browser regressions on Linux and Windows. The Windows tests exercise a real PowerShell request to a local fixture and verify that an untrusted HTTPS certificate is rejected.
 
 ## Troubleshooting
 

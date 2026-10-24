@@ -54,12 +54,28 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--ai", choices=["auto", "bedrock", "off"], default=os.environ.get("AI_MODE", "auto"))
+    ap.add_argument("--roads", choices=["on", "off"], default=os.environ.get("ROAD_ROUTING", "on").strip().lower(),
+                    help="road routing, independent of --ai (default: ROAD_ROUTING or on)")
+    ap.add_argument("--check-routing", action="store_true", help="check a demo road route and exit without starting the server")
     args = ap.parse_args()
     os.environ["AI_MODE"] = args.ai
+    os.environ["ROAD_ROUTING"] = args.roads
+    if args.check_routing:
+        import roads
+        try:
+            road = roads.fetch_route([(37.3382, -121.8863), (37.3541, -121.9552)])
+        except roads.RoadsUnavailable as e:
+            print(f"Road routing failed ({e.code}): {e}", file=sys.stderr)
+            return 1
+        print(f"Road routing OK: {len(road['path'])} street vertices, {road['distance_km']} km.")
+        return 0
     import ai
     st = ai.status()
     print(f"SupplyLine on http://localhost:{args.port}")
     print(f"  AI mode: {st['mode']}   region: {st['region']}")
+    print(f"  Road routing: {args.roads} (independent of AI mode)")
+    if args.roads == "off":
+        print("  Street routes are disabled. Restart with --roads on to enable them.")
     print("  models:  " + ", ".join(st["models"]))
     if args.ai == "off":
         print("  (rules-only fallback: no AWS calls will be made)")
@@ -67,4 +83,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

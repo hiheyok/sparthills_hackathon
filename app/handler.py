@@ -262,7 +262,7 @@ def api_route(d):
     try:
         return {"available": True, **roads.fetch_route(pts)}
     except roads.RoadsUnavailable as e:
-        return {"available": False, "reason": str(e)}
+        return {"available": False, "reason": str(e), "code": e.code}
 
 
 def api_health(_d):

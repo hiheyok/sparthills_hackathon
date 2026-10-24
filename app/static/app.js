@@ -216,18 +216,20 @@
     const token = mapState.token;
     mapState.loading = true;
     $('#mapNote').textContent = 'Finding the fastest road route...';
-    let road = validRoad(cached) ? cached : null, offline = false;
+    let road = validRoad(cached) ? cached : null;
+    let failure = 'Road directions are unavailable right now.';
     if (!road) {
       try {
         const r = await post('/api/route', { points: line.map(([lat, lng]) => ({ lat, lng })) });
         road = r.available && validRoad(r) ? r : null;
-      } catch (e) { offline = !!e.offline; }
+        if (!road) failure = r.reason || 'The routing service returned an invalid road path.';
+      } catch (e) { failure = e.message || failure; }
     }
     if (token !== mapState.token || !mapState.map) return;     // a newer search replaced this plan
     mapState.loading = false;
     const note = $('#mapNote');
     if (!road) {
-      note.innerHTML = `${offline ? 'You are offline' : 'Road directions are unavailable right now'}. The dashed line only connects stops; it is not a driving route. Use Directions or <button type="button" class="btn-small" data-action="retry-road">Retry road route</button>.`;
+      note.innerHTML = `${esc(failure)} The dashed line only connects stops; it is not a driving route. Use Directions or <button type="button" class="btn-small" data-action="retry-road">Retry road route</button>.`;
       return;
     }
     L.polyline(road.path, { color: '#ffffff', weight: 10, opacity: 0.9, lineJoin: 'round', smoothFactor: 0 }).addTo(mapState.layer);

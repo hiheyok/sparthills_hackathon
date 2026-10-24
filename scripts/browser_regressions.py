@@ -227,6 +227,23 @@ class BrowserRegressions(unittest.TestCase):
         self.page.locator('[data-action="retry-road"]').click()
         self.assert_road()
 
+    def test_server_routing_failure_is_shown_and_escaped(self):
+        reason = 'The server could not verify the HTTPS certificate. <img src=x onerror=alert(1)>'
+        self.page.route('**/api/route', lambda r: r.fulfill(json={'available': False, 'code': 'tls_certificate', 'reason': reason}))
+        self.load()
+        self.submit()
+        expect(self.page.locator('#mapNote')).to_contain_text(reason)
+        expect(self.page.locator('#mapNote img')).to_have_count(0)
+        expect(self.page.locator('#map path[stroke-width="4"]')).to_have_count(1)
+        self.assertEqual(self.errors, [])
+
+    def test_unreachable_route_api_does_not_claim_the_browser_is_offline(self):
+        self.page.route('**/api/route', lambda r: r.abort())
+        self.load()
+        self.submit()
+        expect(self.page.locator('#mapNote')).to_contain_text('Could not reach the server')
+        expect(self.page.locator('#mapNote')).not_to_contain_text('You are offline')
+
     def test_old_route_response_cannot_overwrite_new_search(self):
         pending = []
         self.page.route('**/api/route', lambda r: pending.append(r), times=1)

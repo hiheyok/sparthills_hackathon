@@ -1,6 +1,8 @@
 """Road routing: the OSRM client (network mocked) and the /api/route endpoint."""
 import json
 import os
+import socket
+import ssl
 import sys
 import unittest
 import urllib.error
@@ -126,6 +128,30 @@ class RouteEndpoint(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertFalse(body["available"])
         self.assertTrue(body["reason"])
+
+    def test_specific_connection_failures_reach_the_browser_without_private_details(self):
+        cases = [
+            (urllib.error.URLError(ssl.SSLCertVerificationError(1, 'secret proxy detail')), 'tls_certificate', 'certificate'),
+            (urllib.error.URLError(socket.gaierror(-1, 'secret host')), 'dns', 'DNS'),
+            (TimeoutError('secret route'), 'timeout', 'timed out'),
+            (urllib.error.HTTPError('https://secret/', 407, 'secret credential', {}, None), 'proxy_auth', 'proxy'),
+            (urllib.error.HTTPError('https://secret/', 429, 'secret', {}, None), 'rate_limited', 'busy'),
+        ]
+        for failure, code, expected in cases:
+            with self.subTest(code=code), mock.patch.object(roads, '_open', side_effect=failure):
+                status, body = self.post(self.pts(A, B))
+            self.assertEqual(status, 200)
+            self.assertFalse(body['available'])
+            self.assertEqual(body['code'], code)
+            self.assertIn(expected, body['reason'])
+            self.assertNotIn('secret', json.dumps(body))
+
+    def test_disabled_routing_explains_how_to_enable_it(self):
+        with mock.patch.dict(os.environ, {'ROAD_ROUTING': 'off'}):
+            status, body = self.post(self.pts(A, B))
+        self.assertEqual(status, 200)
+        self.assertEqual(body['code'], 'disabled')
+        self.assertIn('ROAD_ROUTING=on', body['reason'])
 
     def test_input_is_validated_before_any_network_call(self):
         bad = [
