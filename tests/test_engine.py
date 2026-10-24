@@ -52,22 +52,26 @@ class EngineTests(unittest.TestCase):
 
     def test_places_are_ranked_by_how_likely_you_can_get_the_item(self):
         # The point of the app is routing people to where they can actually obtain what they need.
-        # For an item stores carry, a store leads. Among relief places (shown when stores are out, or
-        # below stores), the order reflects how reliably you can get supplies there:
-        # relief/supply point > food bank > shelter > cooling/charging center.
+        # For an item stores carry, a store leads.
         r = self.search("food_canned")
         self.assertNotIn(e.STORE_BY_ID[r["stores"][0]["id"]]["type"], e.ACQUISITION_PENALTY,
                          "a real store should lead when it carries the item")
-        # Water is sold out at downtown stores, so relief places lead; check their relative order.
-        water = [e.STORE_BY_ID[s["id"]]["type"] for s in self.search("water_bottled")["stores"]]
-        rank = {t: i for i, t in enumerate(["relief_site", "food_bank", "shelter", "cooling_center"])}
-        relief_ranks = [rank[t] for t in water if t in rank]
-        self.assertEqual(relief_ranks, sorted(relief_ranks),
-                         "relief places should appear best-acquisition-first")
-        # the penalty order is strictly increasing in the intended direction
+        # The per-type penalty is ordered by how reliably you can get supplies there.
+        self.assertEqual(e.ACQUISITION_PENALTY.get("supermarket", 0), 0)
         self.assertLess(e.ACQUISITION_PENALTY["relief_site"], e.ACQUISITION_PENALTY["food_bank"])
         self.assertLess(e.ACQUISITION_PENALTY["food_bank"], e.ACQUISITION_PENALTY["shelter"])
         self.assertLess(e.ACQUISITION_PENALTY["shelter"], e.ACQUISITION_PENALTY["cooling_center"])
+        # At the same distance, the better-acquisition place scores lower (ranks higher).
+        def shop(sid, typ):
+            return {"id": sid, "name": sid, "type": typ, "hood": "x", "free": typ in e.ACQUISITION_PENALTY,
+                    "kind": typ, "lat": DOWNTOWN[0] + 0.01, "lng": DOWNTOWN[1], "hours": {"always": True},
+                    "status": "open", "note": "", "inv": {"water_bottled": {"q": 9, "age": 5}}}
+        shops = [shop("relief", "relief_site"), shop("bank", "food_bank"),
+                 shop("shelter", "shelter"), shop("cool", "cooling_center"), shop("store", "supermarket")]
+        with unittest.mock.patch.object(e, "STORES", shops):
+            with unittest.mock.patch.object(e, "STORE_BY_ID", {s["id"]: s for s in shops}):
+                got = [s["id"] for s in e.search_item("water_bottled", 1, *DOWNTOWN, 8, MORNING, {}, self.now)["stores"]]
+        self.assertEqual(got, ["store", "relief", "bank", "shelter", "cool"])
 
     def test_open_state_boundaries(self):
         store = {"status": "open", "note": "", "hours": {"open": 8 * 60, "close": 21 * 60}}
