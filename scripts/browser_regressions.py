@@ -6,13 +6,14 @@ Requires `pip install playwright` and Chrome (or BROWSER_CHANNEL=chromium with
 AI, road routing and map tiles make no external requests.
 """
 import datetime
+import json
 import os
 import re
 import sys
 import threading
 import time
+import traceback
 import unittest
-from http.server import ThreadingHTTPServer
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright, expect
@@ -23,11 +24,98 @@ sys.path.insert(0, str(ROOT / 'app'))
 os.environ['AI_MODE'] = 'off'
 os.environ['ROAD_ROUTING'] = 'off'
 os.environ.pop('REPORTS_TABLE', None)
-from local_server import Local
+from local_server import Local, LocalHTTPServer
 import handler
 import store
 
 TEXT = 'I need bottled water, canned food and AA batteries'
+
+
+# What the page looked like when a test failed. Short on purpose: it ends up in a CI annotation.
+PAGE_STATE = """() => {
+  const text = (sel) => { const e = document.querySelector(sel); return e ? e.innerText.replace(/\\s+/g, ' ').trim().slice(0, 140) : null; };
+  const go = document.querySelector('#go');
+  return {
+    viewport: innerWidth + 'x' + innerHeight, notice: text('#notice'), formError: text('#formError'),
+    plan: text('#planTitle'), mapNote: text('#mapNote'), go: go ? go.textContent.trim() + (go.disabled ? ' (disabled)' : '') : null,
+    modes: [...document.querySelectorAll('#r-mode .mode-btn')].map((b) => b.dataset.mode + ' pressed=' + b.getAttribute('aria-pressed') + ' ' + b.querySelector('.mode-sub').innerText),
+    paths: [...document.querySelectorAll('#map path')].map((p) => 'w' + p.getAttribute('stroke-width') + ' L' + ((p.getAttribute('d') || '').match(/L/g) || []).length),
+  };
+}"""
+
+
+# Lets a test decide when the page hears about a media-query change (a window crossing a breakpoint).
+HOLD_MEDIA_CHANGES = """(() => {
+  const real = window.matchMedia.bind(window);
+  window.__held = [];
+  window.__holdChanges = false;
+  window.matchMedia = (query) => {
+    const list = real(query);
+    const add = list.addEventListener.bind(list);
+    list.addEventListener = (type, fn, options) => add(type, (event) => {
+      if (type === 'change' && window.__holdChanges) window.__held.push(() => fn(event)); else fn(event);
+    }, options);
+    return list;
+  };
+})();"""
+
+
+def annotation(test, err):
+    """A GitHub Actions error annotation for a failed test, carrying the page state and the requests it made.
+    The job log is not always at hand (it needs sign-in); annotations show on the pull request and in the API."""
+    line = ''
+    for frame in reversed(traceback.extract_tb(err[2]) if err[2] else []):
+        if frame.filename.endswith('browser_regressions.py'):
+            line = f',line={frame.lineno}'
+            break
+    page = getattr(test, 'page', None)
+    try:
+        state = json.dumps(page.evaluate(PAGE_STATE)) if page else 'no page'
+    except Exception as exc:                                  # the page may already be closed
+        state = f'page state unavailable ({type(exc).__name__})'
+    calls = ', '.join(f"{path}:{(body or {}).get('mode', '-')}" for path, body in getattr(test, 'calls', [])[-16:])
+    reason = ' '.join(traceback.format_exception_only(err[0], err[1])).strip()
+    reason = reason.split('\nAria snapshot')[0].strip()                  # Playwright appends the whole page tree
+    body = f'{reason[:700]}\npage: {state[:900]}\nrequests: {calls[:400]}\nnetwork failures: {str(getattr(test, "network_failures", ""))[:500]}\npage errors: {str(getattr(test, "errors", ""))[:300]}'
+    body = body.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+    ident = test.id()
+    title = ident.rsplit('.', 1)[-1] if ' ' not in ident else ident        # class-level errors are named "setUpClass (...)"
+    title = re.sub(r'[,:\r\n]', ' ', title)
+    return f'::error file=scripts/browser_regressions.py{line},title={title}::{body}'
+
+
+class ReportingResult(unittest.TextTestResult):
+    """Builds each annotation while the failed test's page is still open (unittest reports a failure before
+    tearDown), and prints them together after the usual report. Diagnostics never fail a run themselves."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.annotations = []
+
+    def _note(self, test, err):
+        if os.environ.get('GITHUB_ACTIONS') != 'true':
+            return
+        try:
+            self.annotations.append(annotation(test, err))
+        except Exception:
+            pass
+
+    def addFailure(self, test, err):
+        self._note(test, err)
+        super().addFailure(test, err)
+
+    def addError(self, test, err):
+        self._note(test, err)
+        super().addError(test, err)
+
+    def printErrors(self):
+        super().printErrors()
+        for note in self.annotations:
+            self.stream.writeln(note)
+        self.stream.flush()
+
+
+class Runner(unittest.TextTestRunner):
+    resultclass = ReportingResult
 
 
 class QuietLocal(Local):
@@ -53,7 +141,7 @@ class BrowserRegressions(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         store.set_store(store.LocalReportStore())
-        cls.server = ThreadingHTTPServer(('127.0.0.1', 0), QuietLocal)
+        cls.server = LocalHTTPServer(('127.0.0.1', 0), QuietLocal)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
         cls.url = f'http://127.0.0.1:{cls.server.server_port}'
@@ -76,6 +164,9 @@ class BrowserRegressions(unittest.TestCase):
         self.page.set_default_timeout(5000)
         self.page.clock.set_fixed_time(datetime.datetime(2026, 10, 23, 17, tzinfo=datetime.timezone.utc))
         self.errors, self.searches, self.paths, self.calls = [], [], [], []
+        self.network_failures = []
+        self.page.on('requestfailed', lambda req: self.network_failures.append(
+            f'{req.method} {req.url} {req.failure}') if req.url.startswith(self.url) else None)
         self.page.on('request', lambda req: self.calls.append((req.url.split('/api/')[1].split('?')[0], req.post_data_json))
                      if '/api/' in req.url and req.method == 'POST' else None)
         self.page.on('pageerror', lambda err: self.errors.append(str(err)))
@@ -443,7 +534,10 @@ class BrowserRegressions(unittest.TestCase):
 
     def test_each_way_of_travelling_gets_its_own_agents_and_the_screen_lane_gets_its_path_first(self):
         self.load()
-        self.submit()
+        self.page.locator('#text').fill('I need baby formula, canned food and AA batteries')
+        self.page.locator('#text').press('Enter')
+        expect(self.page.locator('#planTitle')).to_be_visible()
+        expect(self.page.locator('#go')).to_be_enabled()
         self.lane_ready('walking')
         deadline = time.time() + 5
         while len(self.api_calls('route')) < 2 and time.time() < deadline:
@@ -1006,5 +1100,81 @@ class BrowserRegressions(unittest.TestCase):
         self.assertEqual(self.errors, [])
 
 
+    def test_free_relief_locations_keep_badges_hours_and_map_selection(self):
+        self.load()
+        self.page.locator('#text').fill('I need bottled water')
+        self.page.locator('#text').press('Enter')
+        expect(self.page.locator('#planTitle')).to_be_visible()
+        option = self.page.locator('#r-items .store-option').filter(has=self.page.locator('.place-kind.free')).first
+        expect(option).to_be_visible()
+        name = option.locator('strong').inner_text()
+        option.click()
+        expect(self.page.locator('.stock-popup h3')).to_have_attribute('title', name)
+        expect(self.page.locator('.stock-popup .place-kind.free')).to_contain_text('(free)')
+        expect(self.page.locator('.stock-popup .popup-hours')).not_to_have_text('Hours unavailable')
+        self.assertEqual(self.errors, [])
+
+    def test_loading_dots_are_accessible_and_respect_reduced_motion(self):
+        held = []
+        self.page.route('**/api/brief', lambda route: held.append(route))
+        self.page.emulate_media(reduced_motion='reduce')
+        self.load()
+        self.page.locator('#text').fill(TEXT)
+        self.page.locator('#text').press('Enter')
+        dots = self.page.locator('#r-mode .dots').first
+        expect(dots).to_have_attribute('aria-label', 'working')
+        self.assertEqual(dots.locator('i').first.evaluate('(e) => getComputedStyle(e).animationName'), 'none')
+        self.page.unroute('**/api/brief')
+        for route in held:
+            route.continue_()
+        expect(self.page.locator('#planTitle')).to_be_visible()
+        expect(self.page.locator('#r-mode .dots')).to_have_count(0)
+        self.assertEqual(self.errors, [])
+
+    def test_route_survives_a_resize_that_arrives_before_the_layout_change(self):
+        # Narrowing the window hides the map where it sits (CSS) until the layout code moves it into the plan.
+        # Whether the resize or the media-query change reaches the page first is up to the browser. On GitHub's
+        # Ubuntu runners the resize sometimes came first, and measuring the hidden map clipped the whole route away.
+        # Hold the media-query change back so the order is the unlucky one every time.
+        self.page.add_init_script(HOLD_MEDIA_CHANGES)
+        self.load()
+        self.submit()
+        self.assert_road()
+        self.page.evaluate('() => { window.__holdChanges = true; }')
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        self.page.evaluate('() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 200))))')
+        self.assertGreater(self.page.evaluate('() => window.__held.length'), 0)     # the change really was held back
+        self.assert_road()
+        self.page.evaluate('() => { window.__holdChanges = false; window.__held.splice(0).forEach((deliver) => deliver()); }')
+        expect(self.page.locator('#map')).to_be_visible()
+        self.assert_road()
+        self.assert_stops_visible()
+
+
+    def test_the_assistant_answers_from_the_situation_while_plans_are_still_building(self):
+        held = []
+        self.page.route('**/api/brief', lambda r: held.append(r))
+        self.load()
+        self.page.locator('#text').fill(TEXT)
+        self.page.locator('#text').press('Enter')
+        expect(self.page.locator('#askPlan')).to_be_enabled()
+        self.page.locator('#askPlan').click()          # asking works as soon as the request is understood
+        expect(self.page.locator('#planTitle')).to_have_count(0)      # while no plan is on screen yet
+        self.page.locator('#assistantQuestion').fill('Should I walk or drive?')
+        self.page.locator('#assistantQuestion').press('Enter')
+        expect(self.page.locator('#assistantAnswer')).to_contain_text('Driving')
+        expect(self.page.locator('#assistantAnswer')).to_contain_text('Walking')
+        self.page.keyboard.press('Escape')
+        self.page.unroute('**/api/brief')
+        for r in held:
+            r.continue_()
+        expect(self.page.locator('#planTitle')).to_be_visible()
+        question = self.api_calls('followup')[0]
+        self.assertEqual((question['mode'], question['radius_km']), ('driving', 8))
+        self.assertTrue(question['intent']['needs'])
+        self.assertIn('lat', question)
+        self.assertEqual(self.errors, [])
+
+
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main(testRunner=Runner, verbosity=2)

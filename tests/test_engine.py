@@ -37,12 +37,16 @@ class EngineTests(unittest.TestCase):
                 self.assertTrue(c["escalate"], f"{c['id']} needs escalation guidance")
 
     def test_shortage_zone_creates_gaps_downtown_but_not_in_almaden(self):
-        for item in ("water_bottled", "batt_d", "propane_1lb", "baby_formula_powder"):
+        # The panic-bought items still gap at downtown STORES. Water is the exception: relief water
+        # points keep it, so a downtown water search now finds a nearby free source instead of nothing.
+        for item in ("batt_d", "propane_1lb", "baby_formula_powder"):
             self.assertEqual(self.search(item)["status"], "gap", item)
-        self.assertNotEqual(self.search("water_bottled", ALMADEN)["status"], "gap")
+        self.assertEqual(self.search("water_bottled")["status"], "found")   # covered by a relief water point
+        self.assertTrue(any(s["free"] for s in self.search("water_bottled")["stores"]))
+        self.assertNotEqual(self.search("baby_formula_powder", ALMADEN)["status"], "gap")
 
     def test_gap_reports_nearest_available_store_elsewhere(self):
-        near = e.nearest_available("water_bottled", DOWNTOWN[0], DOWNTOWN[1], MORNING, {}, self.now)
+        near = e.nearest_available("baby_formula_powder", DOWNTOWN[0], DOWNTOWN[1], MORNING, {}, self.now)
         self.assertIsNotNone(near)
         self.assertGreater(near["dist_km"], 8)
 
@@ -73,19 +77,19 @@ class EngineTests(unittest.TestCase):
         self.assertNotIn(top, [s["id"] for s in after["stores"]])
 
     def test_newer_report_overrides_older_snapshot_and_older_report_does_not(self):
-        gap = self.search("water_bottled")
+        gap = self.search("batt_d")
         self.assertEqual(gap["status"], "gap")
-        sid = next(s["id"] for s in e.STORES if "water_bottled" in s["inv"] and s["status"] != "closed"
+        sid = next(s["id"] for s in e.STORES if "batt_d" in s["inv"] and s["status"] != "closed"
                    and s["hours"].get("always"))
-        fresh = {(sid, "water_bottled"): {"status": "in_stock", "ts": self.now - 60}}
-        found = e.search_item("water_bottled", 1, e.STORE_BY_ID[sid]["lat"], e.STORE_BY_ID[sid]["lng"], 1.0,
+        fresh = {(sid, "batt_d"): {"status": "in_stock", "ts": self.now - 60}}
+        found = e.search_item("batt_d", 1, e.STORE_BY_ID[sid]["lat"], e.STORE_BY_ID[sid]["lng"], 1.0,
                               MORNING, fresh, self.now)
         self.assertEqual(found["status"], "found")
         self.assertEqual(found["stores"][0]["source"], "community")
         # a report older than the snapshot must not override it
-        age = e.STORE_BY_ID[sid]["inv"]["water_bottled"]["age"]
-        stale = {(sid, "water_bottled"): {"status": "in_stock", "ts": self.now - (age + 600) * 60}}
-        res = e.stock_of(e.STORE_BY_ID[sid], "water_bottled", stale, self.now)
+        age = e.STORE_BY_ID[sid]["inv"]["batt_d"]["age"]
+        stale = {(sid, "batt_d"): {"status": "in_stock", "ts": self.now - (age + 600) * 60}}
+        res = e.stock_of(e.STORE_BY_ID[sid], "batt_d", stale, self.now)
         self.assertEqual(res[2], "snapshot")
 
     def test_unexpired_report_stays_authoritative_while_time_passes(self):
@@ -127,6 +131,20 @@ class EngineTests(unittest.TestCase):
     def test_partial_when_quantity_short(self):
         res = e.search_item("insulin", 999, DOWNTOWN[0], DOWNTOWN[1], 8, MORNING, {}, self.now)
         self.assertEqual(res["status"], "partial")
+
+    def test_nearest_store_wins_over_a_slightly_farther_fresher_one(self):
+        # Stock freshness is only a gentle tie-breaker: a store that is clearly closer and has the
+        # item in stock should be chosen even if a farther store's shelf was checked more recently.
+        def shop(sid, dlat, age):
+            return {"id": sid, "name": sid, "type": "supermarket", "hood": "x",
+                    "lat": DOWNTOWN[0] + dlat, "lng": DOWNTOWN[1], "hours": {"always": True},
+                    "status": "open", "note": "", "inv": {"batt_aa": {"q": 9, "age": age}}}
+        near_recent = shop("near_recent", 0.004, age=120)   # ~0.4 km, stock checked 2 h ago
+        far_fresh = shop("far_fresh", 0.02, age=5)          # ~2.2 km, checked 5 min ago
+        with unittest.mock.patch.object(e, "STORES", [near_recent, far_fresh]):
+            res = e.search_item("batt_aa", 1, *DOWNTOWN, 8, MORNING, {}, self.now)
+        self.assertEqual(res["stores"][0]["id"], "near_recent",
+                         "the clearly-nearer in-stock store should rank first despite slightly older stock")
 
     def plan_for(self, item, qty, reports=None):
         return e.build_plan([need(item, 1, qty)], [], *DOWNTOWN, 8, MORNING, reports or {}, self.now)
@@ -194,7 +212,10 @@ class EngineTests(unittest.TestCase):
         alts = [{"for_item": "water_bottled", "verdict": "substitutes_available", "no_purchase_tips": [],
                  "escalate": None,
                  "options": [{"item_id": "water_filter", "fit": "strong", "why": "x", "how_to_use": "y", "caution": ""}]}]
-        plan = e.build_plan([need("water_bottled", 1)], alts, *DOWNTOWN, 8, MORNING, {}, self.now)
+        # Relief water points now keep bottled water downtown, so force it out everywhere to create
+        # the gap this test needs and exercise the substitute swap deterministically.
+        reports = {(s["id"], "water_bottled"): {"status": "out", "ts": self.now} for s in e.STORES}
+        plan = e.build_plan([need("water_bottled", 1)], alts, *DOWNTOWN, 8, MORNING, reports, self.now)
         items = [i for s in plan["route"]["stops"] for i in s["items"]]
         self.assertEqual(len(items), 1)
         self.assertTrue(items[0]["is_alt"])
@@ -283,6 +304,69 @@ class EngineTests(unittest.TestCase):
         text = e.render_plan_text(plan, {"headline": "Go now", "safety_notes": ["Stay safe"]}, urgent=True)
         self.assertIn("call 911", text)
         self.assertIn("instead of Infant formula (powder)", text)
+
+
+class BundlingTests(unittest.TestCase):
+    """With several items, prefer one store that stocks them all; otherwise bundle as many
+    as possible per stop; if an item is nowhere, fall back to the usual gap behavior."""
+
+    def setUp(self):
+        self.now = time.time()
+
+    @staticmethod
+    def shop(sid, dlat, inv):
+        return {"id": sid, "name": sid, "type": "supermarket", "hood": "x",
+                "lat": DOWNTOWN[0] + dlat, "lng": DOWNTOWN[1],
+                "hours": {"always": True}, "status": "open", "note": "",
+                "inv": {k: {"q": q, "age": 5} for k, q in inv.items()}}
+
+    def only(self, *shops):
+        stack = contextlib.ExitStack()
+        stack.enter_context(unittest.mock.patch.object(e, "STORES", list(shops)))
+        stack.enter_context(unittest.mock.patch.object(e, "STORE_BY_ID", {s["id"]: s for s in shops}))
+        return stack
+
+    def plan(self, items):
+        needs = [need(i) for i in items]
+        return e.build_plan(needs, [], *DOWNTOWN, 8, MORNING, {}, self.now)
+
+    def test_one_store_with_everything_is_a_single_stop(self):
+        # A nearer store has only one item; a slightly farther store has all three.
+        # Bundling should win: one stop at the all-in-one store, not three scattered stops.
+        near_one = self.shop("near_one", 0.002, {"insulin": 9})
+        all_three = self.shop("all_three", 0.02, {"insulin": 9, "diapers": 9, "food_canned": 9})
+        with self.only(near_one, all_three):
+            plan = self.plan(["insulin", "diapers", "food_canned"])
+        self.assertEqual(len(plan["route"]["stops"]), 1)
+        stop = plan["route"]["stops"][0]
+        self.assertEqual(stop["store"]["id"], "all_three")
+        self.assertEqual(sorted(i["item_id"] for i in stop["items"]),
+                         ["diapers", "food_canned", "insulin"])
+        self.assertEqual(plan["unresolved"], [])
+
+    def test_bundle_as_much_as_possible_when_no_single_store_has_all(self):
+        # No store has all three; two stores each carry two of them (one overlapping).
+        # The plan should cover everything in two stops, not three.
+        a = self.shop("a", 0.004, {"insulin": 9, "diapers": 9})
+        b = self.shop("b", 0.02, {"diapers": 9, "food_canned": 9})
+        with self.only(a, b):
+            plan = self.plan(["insulin", "diapers", "food_canned"])
+        placed = {i["item_id"] for s in plan["route"]["stops"] for i in s["items"]}
+        self.assertEqual(placed, {"insulin", "diapers", "food_canned"})
+        self.assertEqual(len(plan["route"]["stops"]), 2)
+        self.assertEqual(plan["unresolved"], [])
+
+    def test_item_available_nowhere_falls_back_to_the_usual_gap(self):
+        # One store bundles two items; the third is stocked nowhere, so it stays unresolved
+        # exactly as before, while the two that exist are still bundled into one stop.
+        only_two = self.shop("only_two", 0.01, {"insulin": 9, "diapers": 9})
+        with self.only(only_two):
+            plan = self.plan(["insulin", "diapers", "food_canned"])
+        self.assertEqual(len(plan["route"]["stops"]), 1)
+        stop = plan["route"]["stops"][0]
+        self.assertEqual(sorted(i["item_id"] for i in stop["items"]), ["diapers", "insulin"])
+        self.assertEqual([(u["item_id"], u["reason"]) for u in plan["unresolved"]],
+                         [("food_canned", "no_stock")])
 
 
 class TravelModeTests(unittest.TestCase):

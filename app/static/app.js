@@ -40,6 +40,7 @@
   const newLane = () => ({ status: 'working', result: null, alternatives: [], traces: [], error: '',
     road: null, roadState: 'idle', roadPromise: null, roadFailure: '', closest: null, closestState: 'idle' });
   const assistant = { requestId: 0, context: null, pending: false };
+  const DOTS = '<span class="dots" role="status" aria-label="working"><span class="sr">working</span><i></i><i></i><i></i></span>';
 
   const scrollBehavior = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 
@@ -212,9 +213,12 @@
     const aside = $('.col-map'), shell = $('.shell');
     if (aside.parentNode !== shell) shell.appendChild(aside);
   }
-  function placeMap() {
+  function seatMap() {
     const aside = $('.col-map'), slot = $('#mapSlot');
     if (!wide.matches && slot) { if (aside.parentNode !== slot) slot.appendChild(aside); } else rescueMap();
+  }
+  function placeMap() {
+    seatMap();
     if (mapState.map) setTimeout(fitMap, 60);
   }
   wide.addEventListener('change', placeMap);
@@ -270,6 +274,9 @@
   function fitMap(force = false) {
     const map = mapState.map;
     if (!map) return;
+    // A resize can arrive before the media-query event. Seat the map before measuring it.
+    seatMap();
+    if (!$('#map').offsetWidth || !$('#map').offsetHeight) return;
     map.resize();
     if (force !== true && $('#map .pin.is-focused')) return;
     if (mapState.bounds) map.fit(mapState.bounds, mapState.maxZoom);
@@ -440,9 +447,9 @@
     return `<div class="store-travel ${buttons ? 'mode-switch closest-measures' : 'popup-travel'}" data-store-travel="${esc(store.id)}" data-origin-lat="${origin.lat}" data-origin-lng="${origin.lng}" data-store-lat="${store.lat}" data-store-lng="${store.lng}">
       ${Object.keys(MODES).map((mode) => {
         const lane = laneOf(mode);
-        const text = buttons && lane?.status !== 'ready' ? (lane?.status === 'error' ? 'unavailable' : 'working…') : travelText(travelValue(origin, store, mode));
-        return buttons ? `<button type="button" class="mode-btn" data-action="mode" data-mode="${mode}" data-travel-mode="${mode}" aria-pressed="${state.mode === mode}"><span class="mode-name">${MODES[mode].label}</span><b class="mode-sub">${esc(text)}</b></button>`
-          : `<div class="popup-travel-mode" data-travel-mode="${mode}"><span>${MODES[mode].label}</span><b>${esc(text)}</b></div>`;
+        const text = buttons && lane?.status !== 'ready' ? (lane?.status === 'error' ? 'unavailable' : DOTS) : esc(travelText(travelValue(origin, store, mode)));
+        return buttons ? `<button type="button" class="mode-btn" data-action="mode" data-mode="${mode}" data-travel-mode="${mode}" aria-pressed="${state.mode === mode}"><span class="mode-name">${MODES[mode].label}</span><b class="mode-sub">${text}</b></button>`
+          : `<div class="popup-travel-mode" data-travel-mode="${mode}"><span>${MODES[mode].label}</span><b>${text}</b></div>`;
       }).join('')}
       <span class="travel-status" aria-live="polite">${esc(travelCaption(origin, store))}</span></div>`;
   }
@@ -452,8 +459,10 @@
       const store = { id: element.dataset.storeTravel, lat: +element.dataset.storeLat, lng: +element.dataset.storeLng };
       $$('[data-travel-mode]', element).forEach((tile) => {
         const mode = tile.dataset.travelMode, lane = laneOf(mode);
-        $('b', tile).textContent = tile.tagName === 'BUTTON' && lane?.status !== 'ready'
-          ? (lane?.status === 'error' ? 'unavailable' : 'working…') : travelText(travelValue(origin, store, mode));
+        const value = $('b', tile);
+        if (tile.tagName === 'BUTTON' && lane?.status !== 'ready' && lane?.status !== 'error') {
+          if (!$('.dots', value)) value.innerHTML = DOTS;
+        } else value.textContent = tile.tagName === 'BUTTON' && lane?.status === 'error' ? 'unavailable' : travelText(travelValue(origin, store, mode));
       });
       $('.travel-status', element).textContent = travelCaption(origin, store);
     });
@@ -588,7 +597,7 @@
     const suffix = neighborhood ? `, ${neighborhood}` : '';
     const name = suffix && fullName.endsWith(suffix) ? fullName.slice(0, -suffix.length) : fullName;
     return `<div class="stock-popup"><div class="popup-title-row"><span class="store-rank">${storeRank(store)}</span><div><h3 title="${esc(fullName)}" aria-label="${esc(fullName)}">${esc(name)}</h3>
-      ${neighborhood ? `<p class="popup-neighborhood">${esc(neighborhood)}</p>` : ''}</div></div>
+      ${neighborhood ? `<p class="popup-neighborhood">${esc(neighborhood)}</p>` : ''}</div></div>${kindBadge(store)}
       ${name.length > 32 ? `<details class="popup-full-name"><summary>Full store name</summary><p>${esc(fullName)}</p></details>` : ''}${hoursMarkup(store, 'popup-hours')}<p>Demo inventory</p>
       ${travelMarkup(displayPlan()?.location || state.base, store)}
       <ul class="popup-inventory" tabindex="0" aria-label="Supplies at ${esc(store.name)}">${items.map((i) => `<li>${esc(i.name)}${i.qty ? ` ×${i.qty}` : ''}</li>`).join('')}</ul>
@@ -727,9 +736,14 @@
 
   function storeLine(s, mode) {
     const f = freshness(s);
-    return `<button type="button" class="store store-option" data-action="show-store" data-store="${esc(s.id)}" aria-label="Show ${esc(s.name)} on map"><span class="store-line-heading"><span class="store-rank">${storeRank(s)}</span><strong>${esc(s.name)}</strong></span>
+    return `<button type="button" class="store store-option" data-action="show-store" data-store="${esc(s.id)}" aria-label="Show ${esc(s.name)} on map"><span class="store-line-heading"><span class="store-rank">${storeRank(s)}</span><strong>${esc(s.name)}</strong></span>${kindBadge(s)}
       <span class="facts"><span>${fmtMin(s.eta_min)} ${MODES[mode || 'driving'].verb}</span><span>${fmtMi(s.dist_km)}</span>${hoursMarkup(s)}
       <span class="${f.cls}">${esc(f.text)}</span>${s.low ? '<span class="warn">Low stock</span>' : ''}${s.store_note ? `<span class="warn">${esc(s.store_note)}</span>` : ''}</span></button>`;
+  }
+
+  function kindBadge(store) {
+    if (!store?.kind || (store.kind === 'Store' && !store.free)) return '';
+    return `<span class="place-kind${store.free ? ' free' : ''}">${esc(store.kind)}</span>`;
   }
 
   function gapText(r, mode, radiusKm) {
@@ -809,7 +823,7 @@
         <div id="mapSlot" class="map-slot"></div>
         <details class="route-details"><summary>Pickup route · ${stops.length} stops</summary><ol class="route"><li class="origin"><span class="node" aria-hidden="true"></span><div class="origin-text"><b>Start</b><small>${esc(state.originLabel || '')}${state.originLabel ? ', ' : ''}leave about ${esc(plan.route.leaves)}</small></div></li>
         ${stops.map((s) => `<li class="stop"><span class="node" aria-hidden="true">${s.order}</span><div>
-          <h3>${esc(s.store.name)}</h3>
+          <h3>${esc(s.store.name)}</h3>${kindBadge(s.store)}
           <div class="where-line"><span><b>${fmtMin(s.leg_min)}</b> ${MODES[modeOf(plan)].verb}, ${fmtMi(s.leg_km)}</span><span>Arrive about ${esc(s.arrive)}</span>${hoursMarkup(s.store)}${s.store.store_note ? `<span class="warn">${esc(s.store.store_note)}</span>` : ''}</div>
           ${says[s.order] ? `<p class="say">${esc(says[s.order])}</p>` : ''}
           <ul class="tickets">${s.items.map((i) => ticket(i, s.store.id)).join('')}</ul>
@@ -881,7 +895,8 @@
     if (!state.intent?.needs?.length || !state.base) { toast('Create a new plan to ask about its supplies.'); return; }
     const context = `${state.runId}:${state.mode}`;
     if (assistant.context !== context) { resetAssistant(); assistant.context = context; }
-    $('#assistantContext').textContent = `${MODES[state.mode].label} plan · ${state.originLabel || 'Your search area'}`;
+    const preparing = Object.values(state.lanes).some((lane) => lane.status === 'working');
+    $('#assistantContext').textContent = `${MODES[state.mode].label} plan · ${state.originLabel || 'Your search area'}${preparing ? ' · Store options are still being prepared' : ''}`;
     $('#planAssistant').showModal();
     if (!assistant.pending) $('#assistantQuestion').focus();
   }
@@ -952,7 +967,7 @@
     const overlap = wall > 0 && sum > wall * 1.1
       ? `<p class="trace-note"><b>Done in ${(wall / 1000).toFixed(1)}s.</b> The steps below add up to ${(sum / 1000).toFixed(1)}s because the driving and walking plans were built at the same time.</p>` : '';
     $('#r-trace').innerHTML = `<details${keepOpen ? ' open' : ''}><summary>Under the hood: what Bedrock did</summary>
-      <p class="trace-note">Stock, distance, opening hours and routing are plain code, so they are repeatable. Amazon Bedrock does the language work, and each task has its own agent: one reads your request, one finds substitutes and one writes the briefing for each way of getting there. Driving and walking each get their own, running together. Agents can only choose catalog items, and substitutes only from items confirmed in stock near you. Prescriptions are never substituted.</p>
+      <p class="trace-note">Stock, distance, opening hours and routing are plain code, so they are repeatable. Amazon Bedrock does the language work, and each task has its own agent: one reads your request, one finds substitutes, one writes the briefing for each way of getting there, and one answers your questions. Driving and walking each get their own, running together. Agents can only choose catalog items, and substitutes only from items confirmed in stock near you. Prescriptions are never substituted.</p>
       ${overlap}
       <div class="table-wrap"><table><thead><tr><th>Step</th><th>Handled by</th><th>Model</th><th>Time</th><th>Tokens in / out</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
   }
@@ -1015,10 +1030,10 @@
 
   function laneSummary(m) {
     const l = laneOf(m);
-    if (!l || l.status === 'working') return 'working...';
+    if (!l || l.status === 'working') return DOTS;
     if (l.status === 'error') return 'unavailable';
     const route = l.result.plan.route, n = route.stops.length;
-    return n ? `${l.road ? '' : 'Est. '}${fmtMi(l.road?.distance_km ?? route.total_km)} · ${fmtMin(l.road?.duration_min ?? route.total_travel_min ?? route.total_drive_min)}` : 'nothing in range';
+    return esc(n ? `${l.road ? '' : 'Est. '}${fmtMi(l.road?.distance_km ?? route.total_km)} · ${fmtMin(l.road?.duration_min ?? route.total_travel_min ?? route.total_drive_min)}` : 'nothing in range');
   }
 
   function closestSummary() {
@@ -1029,19 +1044,20 @@
     return `<div class="closest-store" data-current-store="${esc(store.id)}"><div class="closest-topline"><span class="closest-label">${index === 0 ? 'Closest store by location' : 'Nearby stores by distance'}</span>
       <div class="store-browse-controls"><span class="store-position">${index + 1} of ${count}</span>${index > 0 ? arrow(-1, 'Previous closest store', 'm14 6-6 6 6 6') : ''}${index < count - 1 ? arrow(1, 'Next closest store', 'm10 6 6 6-6 6') : ''}</div></div>
       <div class="closest-title-row"><span class="store-rank">${index + 1}</span><h3><button type="button" data-action="show-store" data-store="${esc(store.id)}" title="Show on map">${esc(store.name)}</button></h3></div>
+      ${kindBadge(store)}
       ${hoursMarkup(store, 'closest-hours')}
       ${travelMarkup(origin, store, true)}
       <a target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${store.lat},${store.lng}&travelmode=${state.mode}">Directions ↗</a></div>`;
   }
 
   function renderModeSwitch() {
-    $('#askPlan').disabled = !laneOf(state.mode)?.result || Object.values(state.lanes).some((lane) => lane.status === 'working');
+    $('#askPlan').disabled = !state.intent?.needs?.length || !state.base;
     const el = $('#r-mode');
     if (!Object.keys(state.lanes).length) { el.innerHTML = ''; return; }
     const selected = browsedStore();
     el.innerHTML = selected ? closestSummary() : `<div class="mode-switch" role="group" aria-label="How are you getting there">${Object.keys(MODES).map((m) =>
       `<button type="button" class="mode-btn" data-action="mode" data-mode="${m}" aria-pressed="${state.mode === m}">
-        <span class="mode-name">${MODES[m].label}</span><span class="mode-sub">${esc(laneSummary(m))}</span></button>`).join('')}</div>`;
+        <span class="mode-name">${MODES[m].label}</span><span class="mode-sub">${laneSummary(m)}</span></button>`).join('')}</div>`;
     if (selected) ensureStoreTravel(selected.origin, selected.store);
   }
 
@@ -1069,7 +1085,7 @@
     $('#r-plan').classList.remove('reveal');
     $('#r-plan').innerHTML = lane.status === 'error'
       ? `<p class="lede">${esc(lane.error || `The ${word} plan could not be built.`)}</p><button type="button" class="btn-quiet" data-action="retry-lane" data-mode="${state.mode}">Try the ${word} plan again</button>`
-      : `<p class="lede">Building your ${word} plan...</p>`;
+      : `<p class="lede">Building your ${word} plan ${DOTS}</p>`;
   }
 
   function setMode(m) {
@@ -1194,7 +1210,7 @@
         setStep('alternatives', 'skipped');
       }
 
-      if (state.mode === fg) $('#r-plan').innerHTML = `<p class="lede">Building your ${MODES[fg].ing} route...</p>`;
+      if (state.mode === fg) $('#r-plan').innerHTML = `<p class="lede">Building your ${MODES[fg].ing} route ${DOTS}</p>`;
       setStep('brief', 'active');
       const b = await post('/api/brief', { ...base, mode: fg, intent: u.intent, alternatives: alts });
       state.traces.push(b.trace);

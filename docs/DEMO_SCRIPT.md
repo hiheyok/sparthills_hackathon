@@ -26,9 +26,9 @@ Read the lines in quotes in your own words. Do not read them word for word.
 
 Show the app's first screen.
 
-> "This is Maria. A wildfire warning just went out in San José and her power is off. Her dad uses insulin that has to stay cold, and her baby needs formula. She has a weak signal and a few minutes. Search gives her a list of stores. It does not tell her that one closes before she gets there, that D batteries are sold out downtown, or that she must never swap baby formula for something else. SupplyLine does."
+> "Samantha is a family caregiver in San Jose. She receives a wildfire warning from nearby and the power has gone out. She needs to take care of her baby and lacks the necessities. However, her phone has a weak signal and not that much time. She does not know which store has anything she needs."
 
-Say clearly that Maria is a composite persona and the stores are fictional demo data.
+Say clearly that Samantha is a composite persona and the stores are fictional demo data.
 
 ### 0:40 to 1:40 Architecture
 
@@ -47,7 +47,7 @@ Show `architecture.png`. Point to each box as you name it.
 Click the chip, then press **Enter** (or click **Find supplies**). Let the progress steps run, since they are real.
 
 * Point at the progress strip under the form: it shows which model handled each step and how long it took.
-* Open "What we understood" (it is folded away): it added things Maria did not say. Show one marked "Inferred".
+* Open "What we understood" (it is folded away): it added things Samantha did not say. Show one marked "Inferred".
 * Point at the route: stops in order, each with drive minutes, "Arrive about" time and an opening-hours note. Check on your dry run whether the insulin-related stop is first, and if it is, say the order is urgency-weighted on purpose.
 * Point at the map: the solid blue line is the fastest road route through the stops, in order, with the drive time and distance below it. The "Turn-by-turn in Google Maps" button opens the whole trip with live traffic. If the map shows a dashed straight line instead, the free routing service was busy: say so and move on.
 * Point at the data age on a stop ("Checked 20 min ago", or "call ahead" when the data is stale).

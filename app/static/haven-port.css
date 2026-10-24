@@ -334,3 +334,5 @@ dialog.plan-assistant { width: min(500px, calc(100% - 28px)); background: var(--
 .plan-hours { margin: 7px 0 0; }
 .closest-hours { display: block; margin: 7px 0 0 31px; }
 #map .popup-hours { display: block; margin: 8px 0; white-space: normal; overflow-wrap: anywhere; }
+#r-items .store-option > .place-kind, .closest-store > .place-kind { margin: 5px 0 0 31px; }
+#map .stock-popup > .place-kind { margin-top: 6px; max-width: 100%; white-space: normal; }

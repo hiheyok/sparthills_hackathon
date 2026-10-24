@@ -8,7 +8,7 @@ Built for SpartHill Hacks 2026, AWS Track. Amazon Bedrock does the language work
 
 ## Haven interface
 
-The web app ports the latest Haven export’s typography, cream-and-maroon palette, request card, suggestion buttons, checklist categories, connection dialog, and saved-list cards into the existing large-map layout. The map is visible before searching and includes recenter, zoom, and fullscreen controls; street imagery uses Google Maps when a browser key is configured, with OpenStreetMap as an offline or setup fallback. The interface runs directly in the existing Python app with no JavaScript build step. Search, Bedrock stages, safety checks, road routing, reports, and offline storage still use this repository’s implementation.
+The web app ports Haven’s typography, cream-and-maroon palette, request card, suggestion buttons, checklist categories, connection dialog, and saved-list cards. The homepage keeps Haven’s illustration; searching opens the large map with recenter, zoom, and fullscreen controls. Drag the divider to resize the results panel, browse numbered locations by distance, and compare driving and walking details in the location card or popup. Free relief locations show their place-type badge. Street imagery uses Google Maps when a browser key is configured, with OpenStreetMap as an offline or setup fallback. The interface runs directly in the existing Python app with no JavaScript build step. Search, Bedrock stages, safety checks, road routing, reports, and offline storage still use this repository’s implementation.
 
 Supply checkboxes persist with the last automatic save. Use the bookmark button to keep named supply lists, open **My supply lists** to view or delete them, **Download** for a text copy with checklist progress, or select a map pin for the supplies matched at that store. The **How it works** dialog supports keyboard navigation and Escape. The original household and day-count settings are omitted. Driving and walking each have their own plan and can be compared using the travel buttons.
 
@@ -16,7 +16,7 @@ Store popups, the nearest-store browser, and the “Start at” summary show ope
 
 ## Ask about your plan (Amazon Bedrock)
 
-After creating a plan, select **Ask about plan** above the results. Ask about missing supplies, alternatives, stores, or whether to walk or drive. Suggested questions help start the interaction without adding another form at the bottom of the page.
+Once your request is understood, select **Ask about plan** above the results. You can ask while the plans are still being prepared; the dialog identifies those preliminary answers. Ask about missing supplies, alternatives, stores, or whether to walk or drive. Suggested questions help start the interaction without adding another form at the bottom of the page.
 
 Questions call `/api/followup`, which rebuilds both plans on the server and sends their facts to Amazon Bedrock through the Converse API. Answers identify whether Bedrock or the rules fallback responded. **Run details** shows the actual model, region, elapsed time, and token usage; the same call appears in **Under the hood**. Closing the dialog keeps the current question and answer until the plan or travel mode changes.
 
@@ -39,9 +39,9 @@ For AWS, set `GOOGLE_MAPS_API_KEY` and optionally `GOOGLE_MAPS_MAP_ID` in the de
 
 ## The persona
 
-**Maria, a family caregiver in San José.** A wildfire warning has just gone out and the power is off. Her father uses insulin that must stay cold. Her baby needs formula and diapers. She has a phone with a weak signal and a few minutes. She does not know which store still has anything, and she does not know what is safe to use instead.
+**Samantha is a family caregiver in San Jose.** She receives a wildfire warning from nearby and the power has gone out. She needs to take care of her baby and lacks the necessities. However, her phone has a weak signal and not that much time. She does not know which store has anything she needs.
 
-(Maria is a composite persona, not a real person.)
+(Samantha is a composite persona, not a real person.)
 
 The critical service is **getting essential supplies to a household during a disruption**. Search engines and map apps return a list of stores. They do not know that a store closes before you arrive, that D batteries sold out across downtown, or that you must not swap baby formula for something else.
 
@@ -49,7 +49,7 @@ The critical service is **getting essential supplies to a household during a dis
 
 1. **Understands a messy request.** Free text like "dad uses insulin, baby needs formula" becomes a list of supplies from a fixed 70-item catalog, and it adds the needs people forget (a cooler and ice for the insulin).
 2. **Finds real availability.** For each item it checks stock, how old the stock data is, and whether the store will still be open when you arrive.
-3. **Plans a route.** Up to 4 stops that cover everything, with the most urgent items first. The map draws the fastest road route through them in that order, and one tap opens the whole trip in Google Maps for turn-by-turn with live traffic.
+3. **Plans a route, on foot or by car.** Up to 4 stops that cover everything, with the most urgent items first. Drive and Walk are two separate plans, not one plan with two labels: on foot the range is shorter (3 km), every leg takes longer, and a store that is open when a car arrives can be closed by the time a walker does. The map draws a road route for driving and a footpath route for walking, and one tap opens the trip in Google Maps for turn-by-turn.
 4. **Finds alternatives when something is out.** Amazon Bedrock picks substitutes, but only from items confirmed in stock near you, and only from a hand-written safe list for risky items.
 5. **Explains it in plain language.** A short briefing, a plan-question dialog, and copy, text-message and print options.
 6. **Takes neighbor reports.** "Has it", "Running low", "Sold out", "It is closed". Reports expire after 6 hours.
@@ -114,9 +114,17 @@ bash scripts/destroy.sh               # remove everything when you are done
 
 `deploy.sh` builds a zip of `app/`, uploads it to a private S3 bucket, and runs CloudFormation (`infra/template.yaml`). The stack creates one Lambda function (Python 3.12, arm64) behind an API Gateway HTTP API, a DynamoDB table with a 6-hour TTL for neighbor reports, a log group with 14-day retention, and a least-privilege IAM role.
 
-Optional settings (environment variables for `deploy.sh`): `AWS_REGION`, `STACK_NAME`, `BEDROCK_REGION`, `BEDROCK_MODEL_IDS` (comma separated), `GUARDRAIL_ID`.
+Optional settings (environment variables for `deploy.sh`): `AWS_REGION`, `STACK_NAME`, `BEDROCK_REGION`, `BEDROCK_MODEL_IDS` (comma separated), `GUARDRAIL_ID`, `GOOGLE_MAPS_API_KEY`, `GOOGLE_MAPS_MAP_ID`, `INVENTORY_SNAPSHOT_TS`.
 
-Road routing can be tuned on the function with `ROAD_ROUTING=off` (never call the routing service) or `ROAD_ROUTING_URL` (point at your own OSRM-compatible server).
+The browser uses Google Maps when `GOOGLE_MAPS_API_KEY` is configured, and falls back to the bundled Leaflet library with OpenStreetMap tiles if the key is absent or Google Maps fails. For local use, put `GOOGLE_MAPS_API_KEY` and optionally `GOOGLE_MAPS_MAP_ID` in `.env.local`, or export them before starting the server. The Google Maps browser key is sent to the page; restrict it to your website in Google Cloud. Map display is separate from the server's OSRM calls for driving and walking route geometry.
+
+Road routing can be tuned on the function with `ROAD_ROUTING=off` (never call a routing service, for walking or driving), `ROAD_ROUTING_URL` (point driving at your own OSRM-compatible server) or `ROAD_ROUTING_WALK_URL` (the same for walking; it must serve a foot profile).
+
+### One AI agent per task
+
+Each task has its own agent with its own prompt, output size, temperature and time budget, and you can give it its own models. These are task-specific Converse calls orchestrated by Python and browser code; the app does not use the managed Amazon Bedrock Agents service. Set `BEDROCK_MODEL_IDS_<TASK>` on the function (comma separated, like `BEDROCK_MODEL_IDS`) for `UNDERSTAND`, `ALTERNATIVES`, `BRIEF` or `FOLLOWUP`, for example a smaller, faster model for the short answers of `FOLLOWUP`. A task with no setting uses `BEDROCK_MODEL_IDS`, then the defaults below. `/api/health` lists every agent and its models.
+
+After understanding the request once, the browser builds driving and walking plans concurrently, each with separate substitutes and briefing calls. The foreground plan shows progress through search, alternatives when needed, and briefing; the background plan searches inside its alternatives and briefing endpoints. Switching to a completed plan needs no new planning calls; a plan still building shows a loading state. A background failure leaves the foreground plan available and offers a retry. A foreground failure clears both plans for that search and shows the main retry notice. The assistant reads your situation on the server, so it can answer as soon as your request is understood, before either plan is ready.
 
 ### Which models
 
@@ -139,20 +147,21 @@ The stack also allows the function role `bedrock:ApplyGuardrail` on that one gua
 
 | Rubric item | Where to see it |
 |---|---|
-| Real persona and need (20) | Maria above. Wildfire, insulin and a baby are the first example in the app. |
-| Working app (25) | Live URL after `deploy.sh`. Works offline for the last plan. 4 automated test files. |
+| Real persona and need (20) | Samantha above. Wildfire, insulin and a baby are the first example in the app. |
+| Working app (25) | Live URL after `deploy.sh`. Saved plans work offline. Automated backend and browser regression suites. |
 | AWS AI use (20) | Four Bedrock stages (understand, alternatives, briefing, follow-up) via the Converse API, with a model fallback chain, optional Guardrails, and a trace panel ("Under the hood: what Bedrock did", folded away by default) that shows the model, time and tokens for each call. |
 | Understanding what you built (15) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): what is code, what is the model, and why. |
-| Polish (10) | Accessible, mobile first, installable, prints, no external CDN (only map tile images come from OpenStreetMap), checked at phone width. |
+| Polish (10) | Accessible, mobile first, installable, prints, bundled app scripts, fonts and Leaflet, checked at phone width. Google Maps loads externally when configured; the fallback loads OpenStreetMap tiles. |
 | Above and beyond (10) | Safety policy per item, stock freshness, open-on-arrival checks, urgency-weighted routing, neighbor reports with expiry, graceful fallback, one-command deploy and teardown. |
 
 The video script is in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 
 ## Honest limits
 
-* **The data is fictional.** 53 invented stores in 16 San José neighborhoods and made-up stock, generated with a fixed seed (`scripts/gen_data.py`). It shows how the app behaves in a shortage. It is not a real inventory feed.
+* **The data is fictional.** 53 invented stores plus 10 invented crisis-relief places (food banks, shelters, distribution points and cooling/charging centers) across San José neighborhoods, with made-up stock, generated with a fixed seed (`scripts/gen_data.py`). It shows how the app behaves in a shortage, including surfacing free community resources when stores are sold out. **These relief places are not real** — do not go to them. A real deployment would pull relief sites from official feeds (211, FEMA, county emergency management). It is not a real inventory feed.
 * **The demo stock ages in real time.** Each record's "checked N minutes ago" is counted from one snapshot time (the deploy time on AWS, the server start locally), so "fresh" stock turns into "call ahead" after a few hours. A neighbor report stays in force for its 6 hours, because it is compared with that same snapshot time. Redeploy to refresh the demo data.
-* **Drive times in the plan are estimates** (straight-line distance, a detour factor and a slow fixed speed). There is no live traffic and no road closures.
+* **Drive and walk times in the plan are estimates** (straight-line distance, a detour factor and a slow fixed speed: 28 km/h by car, 4 km/h on foot). There is no live traffic, no road closures, and walking knows nothing about hills, stairs or whether a footpath is open. Walking plans stay within 3 km of you.
+* **The walking route uses a second free public service.** Footpaths come from the OpenStreetMap community's routing server at routing.openstreetmap.de, because the public OSRM demo server only routes cars (it ignores the profile in the URL). Its terms ask for the OpenStreetMap credit and a "fix the map" link (both are shown), a valid user agent, no more than one request per second and no heavy use, so the app asks for the path of the plan on screen first and the other one after it. That is fine for a demo; for real traffic run your own OSRM with a foot profile (`ROAD_ROUTING_WALK_URL`) or use Amazon Location Service.
 * **The road route on the map comes from a free public service.** It uses the public OSRM demo server with OpenStreetMap data. That service has no uptime promise and no live traffic, so if it is down the map shows a straight dashed line and says so. Its time can differ from the plan's estimate, which is deliberately slower and includes shopping time. Your function (not the browser) calls it, so only the coordinates of your location and the stops are sent, never your IP address. For production use Amazon Location Service.
 * **The rules fallback is much weaker than the model.** It matches keywords. It is there so the app is never dead, not to replace the model. Its substitutes come from a short hand-written list (`FALLBACK_SUBS` in `ai.py`), so many items get none. Batteries never get one, because it cannot tell what they are for and a different size will not fit.
 * **Neighbor reports are unverified.** Anyone can post one, so a bad actor could mislead. The only protection today is a 6-hour expiry, a per-IP rate limit and input validation.
@@ -171,12 +180,12 @@ app/
   handler.py     Lambda entry point: routes, validation, rate limit, security headers, static files
   engine.py      Search, store hours, route planning, safety policy enforcement (no AI)
   ai.py          Amazon Bedrock stages, validation, model fallback, rules fallback
-  roads.py       Road route for the map (public OSRM service, fails soft)
+  roads.py       Driving and walking routes for the map (public OSRM services, fail soft)
   road_transport.py  HTTPS fetch, with a native Windows fallback for connection failures
-  store.py       Neighbor reports (DynamoDB, or in memory locally)
-  geo.py         Distance and travel time
+  store.py       Neighbor reports (DynamoDB on AWS; memory + JSON file by default locally)
+  geo.py         Distance, and travel time for driving and walking
   data/          catalog.json, stores.json, places.json (generated)
-  static/        The web app: index.html, app.js, styles.css, service worker, map, fonts
+  static/        The web app, service worker, map adapters (maps.js), bundled Leaflet and fonts
 infra/template.yaml   CloudFormation stack
 scripts/              deploy.sh, destroy.sh, smoke.py, gen_data.py
 tests/                Engine, AI, handler and AWS request-shape tests
@@ -212,7 +221,7 @@ GitHub Actions runs the backend and browser regressions on Linux and Windows. Th
 | Every model fails but the first few worked before | Throttling. Failures are remembered for 20 seconds, then retried. |
 | Error about an inference profile or `us.` model | Your account may block cross-region profiles. The chain already falls through to in-region Nova models. Or set `BEDROCK_MODEL_IDS` to a model you can use. |
 | `no credentials` in the trace | Export credentials (local) or check the Lambda role (deployed). The app answers with rules in the meantime. |
-| Request takes too long | The Lambda limit is 29 seconds (the API Gateway limit). Each stage may use up to 24 seconds of model time, never more than the request has left minus a 3 second reserve. Each call gets a timeout that fits in the time left, the SDK never retries on its own, and no call or JSON repair starts with under 5 seconds left. Then the app falls back to rules. |
+| Request takes too long | Lambda is configured with a 29-second timeout and the API Gateway integration with 30 seconds. Each stage may use up to 24 seconds of model time, never more than the request has left minus a 3 second reserve. Each call gets a timeout that fits in the time left, the SDK never retries on its own, and no call or JSON repair starts with under 5 seconds left. Then the app falls back to rules. |
 | The map line is dashed and straight | The routing service could not be reached (the function may have no internet, or the free service is busy). The dashed line connects stops; it is not a driving route. Click **Retry road route** or open **Turn-by-turn in Google Maps**. Transient routing failures are retried once automatically. |
 | Map background blank | Map tiles come from OpenStreetMap and need a network. They also need the browser to send a Referer, so the app sets `Referrer-Policy: strict-origin-when-cross-origin`. A privacy extension that strips Referer will blank the tiles. The app shows a notice, and the route, stops and list still work. |
 | `deploy.sh` fails on the bucket | Set `ARTIFACT_BUCKET` to a bucket you own, or check your credentials with `aws sts get-caller-identity`. |

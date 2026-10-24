@@ -154,7 +154,7 @@ class HandlerTests(unittest.TestCase):
         self.assertIn("pharmacy", alt["escalate"])
 
     def test_full_plan_endpoint_and_urgent_banner(self):
-        status, body = post("/api/plan", {**DOWNTOWN, "text": "Earthquake. We smell gas in the garage and have no water. Need water and canned food."})
+        status, body = post("/api/plan", {**DOWNTOWN, "text": "Earthquake. We smell gas in the garage and have no water. Need water, canned food and D batteries for our lantern."})
         self.assertEqual(status, 200)
         self.assertTrue(body["urgent"])
         self.assertIn("911", body["plan_text"])

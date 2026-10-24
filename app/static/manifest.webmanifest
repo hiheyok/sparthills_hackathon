@@ -1,6 +1,6 @@
 {
-  "name": "SupplyLine",
-  "short_name": "SupplyLine",
+  "name": "Haven",
+  "short_name": "Haven",
   "description": "Find open stores with the supplies you need in a disaster, or a safe alternative when nobody has them.",
   "start_url": "/",
   "display": "standalone",
