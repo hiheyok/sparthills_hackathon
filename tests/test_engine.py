@@ -1,3 +1,4 @@
+import contextlib
 import os
 import sys
 import time
@@ -8,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
 import engine as e  # noqa: E402
 import store as report_store  # noqa: E402
+from geo import WALK_MAX_KM, eta_min, haversine_km, reach_km  # noqa: E402
 
 DOWNTOWN = (37.3382, -121.8863)
 ALMADEN = (37.2260, -121.8640)
@@ -281,6 +283,84 @@ class EngineTests(unittest.TestCase):
         text = e.render_plan_text(plan, {"headline": "Go now", "safety_notes": ["Stay safe"]}, urgent=True)
         self.assertIn("call 911", text)
         self.assertIn("instead of Infant formula (powder)", text)
+
+
+class TravelModeTests(unittest.TestCase):
+    """Driving and walking are two plans over the same stores: different range, different times,
+    and a store that is open when a car arrives can be closed by the time a walker does."""
+
+    def setUp(self):
+        self.now = time.time()
+
+    @staticmethod
+    def shop(sid, dlat, close_min=22 * 60):
+        return {"id": sid, "name": sid, "type": "supermarket", "hood": "x", "lat": DOWNTOWN[0] + dlat, "lng": DOWNTOWN[1],
+                "hours": {"open": 6 * 60, "close": close_min}, "status": "open", "note": "",
+                "inv": {"insulin": {"q": 10, "age": 5}}}
+
+    def only(self, *shops):
+        """Replace the demo stores with these."""
+        stack = contextlib.ExitStack()
+        stack.enter_context(unittest.mock.patch.object(e, "STORES", list(shops)))
+        stack.enter_context(unittest.mock.patch.object(e, "STORE_BY_ID", {s["id"]: s for s in shops}))
+        return stack
+
+    def plan(self, mode, item="insulin"):
+        return e.build_plan([need(item, 1)], [], *DOWNTOWN, 8, MORNING, {}, self.now, mode=mode)
+
+    def test_walking_is_much_slower_than_driving_and_limited_in_range(self):
+        self.assertEqual(eta_min(2.4), 7)
+        self.assertEqual(eta_min(2.4, "walking"), 45)
+        self.assertEqual((reach_km(8), reach_km(8, "walking"), reach_km(1.5, "walking")), (8, WALK_MAX_KM, 1.5))
+        with self.assertRaises(KeyError):
+            eta_min(1, "hovercraft")
+
+    def test_walking_search_uses_walking_range_and_times(self):
+        walk = e.search_item("insulin", 1, *DOWNTOWN, 8, MORNING, {}, self.now, mode="walking")
+        drive = e.search_item("insulin", 1, *DOWNTOWN, 8, MORNING, {}, self.now)
+        self.assertTrue(walk["stores"])
+        for s in walk["stores"]:
+            d = haversine_km(*DOWNTOWN, s["lat"], s["lng"])
+            self.assertLessEqual(d, WALK_MAX_KM)
+            self.assertEqual(s["eta_min"], eta_min(d, "walking"))
+        self.assertTrue(any(haversine_km(*DOWNTOWN, s["lat"], s["lng"]) > WALK_MAX_KM for s in drive["stores"]),
+                        "the driving search should reach stores a walker would not be sent to")
+
+    def test_walking_plan_is_its_own_plan(self):
+        walk, drive = self.plan("walking"), self.plan("driving")
+        self.assertEqual((walk["mode"], walk["route"]["mode"], drive["mode"], drive["route"]["mode"]),
+                         ("walking", "walking", "driving", "driving"))
+        self.assertEqual((walk["location"]["radius_km"], drive["location"]["radius_km"]), (WALK_MAX_KM, 8))
+        self.assertGreater(walk["route"]["total_travel_min"], drive["route"]["total_travel_min"])
+        self.assertEqual(walk["route"]["total_travel_min"], walk["route"]["total_drive_min"])   # the original field name
+        self.assertIn("on foot", e.render_plan_text(walk))
+        self.assertIn(" min walk,", e.render_plan_text(walk))
+        self.assertIn(" min drive,", e.render_plan_text(drive))
+        self.assertNotIn("on foot", e.render_plan_text(drive))
+
+    def test_a_store_open_for_a_car_can_be_closed_for_a_walker(self):
+        # 2.5 km away, closes at 10:40. A car arrives at 10:07; a walker would arrive at 10:47.
+        with self.only(self.shop("closing", 0.0225, close_min=10 * 60 + 40)):
+            drive, walk = self.plan("driving"), self.plan("walking")
+        self.assertEqual([s["store"]["id"] for s in drive["route"]["stops"]], ["closing"])
+        self.assertEqual(walk["route"]["stops"], [])
+        self.assertEqual([(u["item_id"], u["reason"]) for u in walk["unresolved"]], [("insulin", "no_stock")])
+
+    def test_nobody_is_sent_beyond_walking_range(self):
+        with self.only(self.shop("far", 0.045)):                      # about 5 km
+            drive, walk = self.plan("driving"), self.plan("walking")
+        self.assertEqual([s["store"]["id"] for s in drive["route"]["stops"]], ["far"])
+        self.assertEqual(walk["route"]["stops"], [])
+
+    def test_alternatives_are_checked_against_the_walking_range_too(self):
+        alts = [{"for_item": "water_bottled", "options": [{"item_id": "water_filter"}]}]
+        near, far = self.shop("near", 0.009), self.shop("far", 0.045)
+        near["inv"] = {"water_filter": {"q": 9, "age": 5}}
+        far["inv"] = {"water_filter": {"q": 9, "age": 5}}
+        for shops, expect_swap in (((near,), True), ((far,), False)):
+            with self.only(*shops):
+                plan = e.build_plan([need("water_bottled", 1)], alts, *DOWNTOWN, 8, MORNING, {}, self.now, mode="walking")
+            self.assertEqual(bool(plan["alternatives"][0]["options"]), expect_swap, [s.get("id") for s in shops])
 
 
 if __name__ == "__main__":
