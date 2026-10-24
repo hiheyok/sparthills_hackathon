@@ -6,11 +6,13 @@ the same handler() so local and cloud behave identically.
 """
 import base64
 import collections
+import contextvars
 import json
 import logging
 import math
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import ai
@@ -18,7 +20,7 @@ import engine
 import roads
 import store
 from engine import CATALOG, CATALOG_LIST, PLACES, STORE_BY_ID, STORES
-from geo import haversine_km
+from geo import DEFAULT_MODE, MODES, WALK_MAX_KM, fmt_clock, haversine_km, reach_km
 
 log = logging.getLogger("supplyline")
 logging.getLogger().setLevel(logging.INFO)
@@ -90,6 +92,16 @@ def _json_body(event):
     return d
 
 
+def _mode(d):
+    """How the person is getting there: "driving" (the default) or "walking"."""
+    m = d.get("mode")
+    if m is None or m == "":
+        return DEFAULT_MODE
+    if not isinstance(m, str) or m not in MODES:
+        raise HttpError(400, "mode must be driving or walking.")
+    return m
+
+
 def _loc(d):
     try:
         lat, lng = float(d["lat"]), float(d["lng"])
@@ -107,8 +119,10 @@ def _loc(d):
 
 def _ctx(d):
     lat, lng, radius = _loc(d)
+    mode = _mode(d)
     now_ts = time.time()
-    return {"lat": lat, "lng": lng, "radius": radius, "now_min": engine.local_minutes(d.get("local_minutes")),
+    return {"lat": lat, "lng": lng, "mode": mode, "radius": reach_km(radius, mode),
+            "now_min": engine.local_minutes(d.get("local_minutes")),
             "now_ts": now_ts, "reports": store.get_store().all_recent(now_ts)}
 
 
@@ -149,6 +163,7 @@ def api_meta(_d):
         "places": PLACES,
         "catalog": [{"id": c["id"], "name": c["name"], "category": c["category"]} for c in CATALOG_LIST],
         "ai": ai.status(),
+        "travel": {"modes": list(MODES), "walk_max_km": WALK_MAX_KM},
         "data": {"stores": len(STORES), "demo": True,
                  "note": "Stores, addresses and inventory are fictional demo data."},
     }
@@ -167,24 +182,24 @@ def api_understand(d):
 
 def api_search(d):
     c, needs = _ctx(d), _needs(d)
-    results = engine.search(needs, c["lat"], c["lng"], c["radius"], c["now_min"], c["reports"], c["now_ts"])
-    return {"results": results, "gaps": [r["item_id"] for r in results if r["status"] == "gap"],
-            "meta": {"stores_total": len(STORES), "radius_km": c["radius"]}}
+    results = engine.search(needs, c["lat"], c["lng"], c["radius"], c["now_min"], c["reports"], c["now_ts"], c["mode"])
+    return {"results": results, "gaps": [r["item_id"] for r in results if r["status"] == "gap"], "mode": c["mode"],
+            "meta": {"stores_total": len(STORES), "radius_km": c["radius"], "mode": c["mode"]}}
 
 
 def api_alternatives(d):
     c, needs = _ctx(d), _needs(d)
     intent = ai.clean_intent(d.get("intent") or {"needs": needs})
-    results = engine.search(needs, c["lat"], c["lng"], c["radius"], c["now_min"], c["reports"], c["now_ts"])
+    results = engine.search(needs, c["lat"], c["lng"], c["radius"], c["now_min"], c["reports"], c["now_ts"], c["mode"])
     gaps = [{"item_id": r["item_id"], "label": r["label"], "priority": r["priority"], "why": r["why"]}
             for r in results if r["status"] == "gap"]
     if not gaps:
-        return {"alternatives": [], "trace": None}
+        return {"alternatives": [], "trace": None, "mode": c["mode"]}
     pool = engine.in_stock_nearby(c["lat"], c["lng"], c["radius"], c["now_min"], c["reports"], c["now_ts"],
-                                  exclude={g["item_id"] for g in gaps})
-    alts, trace = ai.alternatives(gaps, pool, intent)
-    plan = engine.build_plan(needs, alts, c["lat"], c["lng"], c["radius"], c["now_min"], c["reports"], c["now_ts"])
-    return {"alternatives": plan["alternatives"], "trace": trace}
+                                  exclude={g["item_id"] for g in gaps}, mode=c["mode"])
+    alts, trace = ai.alternatives(gaps, pool, intent, c["mode"])
+    plan = engine.build_plan(needs, alts, c["lat"], c["lng"], c["radius"], c["now_min"], c["reports"], c["now_ts"], c["mode"])
+    return {"alternatives": plan["alternatives"], "trace": trace, "mode": c["mode"]}
 
 
 def api_brief(d):
@@ -193,36 +208,91 @@ def api_brief(d):
     if not intent["needs"]:
         raise HttpError(400, "No valid supply items were provided.")
     plan = engine.build_plan(intent["needs"], _clean_alts(d.get("alternatives")), c["lat"], c["lng"],
-                             c["radius"], c["now_min"], c["reports"], c["now_ts"])
+                             c["radius"], c["now_min"], c["reports"], c["now_ts"], c["mode"])
     brief, trace = ai.brief(plan, intent)
     urgent = bool(intent["urgent_safety"].get("flag"))
-    return {"plan": plan, "brief": brief, "trace": trace, "urgent": urgent,
+    return {"plan": plan, "brief": brief, "trace": trace, "urgent": urgent, "mode": c["mode"],
             "plan_text": engine.render_plan_text(plan, brief, urgent)}
+
+
+def _modes(d):
+    """The ways of travelling to plan for: "modes" lists them, "mode" alone means just that one."""
+    raw = d.get("modes")
+    if raw is None:
+        return [_mode(d)]
+    if not isinstance(raw, list) or not 1 <= len(raw) <= len(MODES):
+        raise HttpError(400, "modes must list driving, walking or both.")
+    out = []
+    for m in raw:
+        m = _mode({"mode": m})
+        if m not in out:
+            out.append(m)
+    return out
+
+
+def _run_lane(d, mode):
+    """One way of travelling, start to finish: substitutes, then the plan and its briefing. Lanes
+    read the same data and share nothing they change, so they can run side by side."""
+    dm = dict(d, mode=mode)
+    a = api_alternatives(dm)
+    b = api_brief(dict(dm, alternatives=a["alternatives"]))
+    return {"mode": mode, "plan": b["plan"], "brief": b["brief"], "plan_text": b["plan_text"], "urgent": b["urgent"],
+            "alternatives": a["alternatives"], "traces": ([a["trace"]] if a["trace"] else []) + [b["trace"]]}
 
 
 def api_plan(d):
     """Whole pipeline in one call (CLI, tests). Can take longer than API Gateway's
     30 s limit when several Bedrock calls are slow; the web app calls the stages
-    separately instead so it can show live progress."""
-    traces = []
+    separately instead so it can show live progress.
+
+    With "modes": ["driving", "walking"] the lanes run at the same time, each with its own
+    substitutes and briefing agents, so two plans take about as long as one."""
+    modes = _modes(d)
     u = api_understand(d)
-    traces.append(u["trace"])
     d2 = dict(d, intent=u["intent"])
-    a = api_alternatives(d2)
-    if a["trace"]:
-        traces.append(a["trace"])
-    b = api_brief(dict(d2, alternatives=a["alternatives"]))
-    traces.append(b["trace"])
-    return {"intent": u["intent"], "plan": b["plan"], "brief": b["brief"], "plan_text": b["plan_text"],
-            "urgent": b["urgent"], "traces": traces}
+    if len(modes) == 1:
+        lanes = {modes[0]: _run_lane(d2, modes[0])}
+    else:
+        with ThreadPoolExecutor(max_workers=len(modes)) as workers:
+            # each lane gets its own copy of the request context, which carries the Bedrock deadline
+            futures = {m: workers.submit(contextvars.copy_context().run, _run_lane, d2, m) for m in modes}
+            lanes = {m: f.result() for m, f in futures.items()}
+    first = lanes[modes[0]]
+    out = {"intent": u["intent"], "plan": first["plan"], "brief": first["brief"], "plan_text": first["plan_text"],
+           "urgent": first["urgent"], "traces": [u["trace"]] + [t for m in modes for t in lanes[m]["traces"]]}
+    if len(modes) > 1:
+        out["lanes"] = {m: {k: v for k, v in lane.items() if k != "traces"} for m, lane in lanes.items()}
+    return out
+
+
+def _situation(d, mode):
+    """Everything the assistant may know about the person's situation right now, built here from the
+    engine's own plans for both ways of travelling instead of taken on trust from the browser.
+    None when the request does not say where the person is or what they need."""
+    try:
+        c = _ctx(dict(d, mode=DEFAULT_MODE))
+    except HttpError:
+        return None
+    intent = ai.clean_intent(d.get("intent") or {})
+    if not intent["needs"]:
+        return None
+    alts = d.get("alternatives") if isinstance(d.get("alternatives"), dict) else {}
+    plans = {m: ai.plan_facts(engine.build_plan(intent["needs"], _clean_alts(alts.get(m)), c["lat"], c["lng"], c["radius"],
+                                                c["now_min"], c["reports"], c["now_ts"], m)) for m in MODES}
+    return {"local_time": fmt_clock(c["now_min"]), "selected_mode": mode, "walking_range_km": WALK_MAX_KM,
+            "disaster": intent["disaster"], "household": intent["household"], "urgent_safety": intent["urgent_safety"],
+            "needs": [{"item": CATALOG[n["item_id"]]["name"], "quantity": n["qty"], "priority": n["priority"]}
+                      for n in intent["needs"]],
+            "plans": plans}
 
 
 def api_followup(d):
     q = str(d.get("question") or "").strip()[:400]
     if len(q) < 3:
         raise HttpError(400, "Type a question about your plan.")
-    ans, trace = ai.followup(q, str(d.get("plan_text") or "")[:6000])
-    return {"answer": ans, "trace": trace}
+    situation = _situation(d, _mode(d))
+    ans, trace = ai.assistant(q, situation, str(d.get("plan_text") or "")[:6000])
+    return {"answer": ans, "trace": trace, "grounded": situation is not None}
 
 
 def api_report(d):
@@ -239,12 +309,14 @@ def api_report(d):
     return {"ok": True, "expires_in_hours": store.REPORT_TTL_S // 3600}
 
 
-MAX_LEG_KM = 80   # the search radius is at most 50 km, so a longer hop is not a real plan
+MAX_LEG_KM = 80        # the search radius is at most 50 km, so a longer hop is not a real plan
+MAX_WALK_LEG_KM = 15   # walking plans stay within a few km; a longer walk is not a real plan either
 
 
 def api_route(d):
-    """The fastest road route through the plan's points, in the order given.
+    """The fastest route through the plan's points, in the order given, by car or on foot.
     Never an error for a routing outage: the browser falls back to a straight line."""
+    mode = _mode(d)
     raw = d.get("points")
     if not isinstance(raw, list) or not (2 <= len(raw) <= roads.MAX_POINTS):
         raise HttpError(400, f"Send between 2 and {roads.MAX_POINTS} points.")
@@ -257,12 +329,13 @@ def api_route(d):
         if not (math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180):
             raise HttpError(400, "A point is out of range.")
         pts.append((lat, lng))
-    if any(haversine_km(a[0], a[1], b[0], b[1]) > MAX_LEG_KM for a, b in zip(pts, pts[1:])):
+    limit = MAX_WALK_LEG_KM if mode == "walking" else MAX_LEG_KM
+    if any(haversine_km(a[0], a[1], b[0], b[1]) > limit for a, b in zip(pts, pts[1:])):
         raise HttpError(400, "Those points are too far apart.")
     try:
-        return {"available": True, **roads.fetch_route(pts)}
+        return {"available": True, **roads.fetch_route(pts, mode)}
     except roads.RoadsUnavailable as e:
-        return {"available": False, "reason": str(e), "code": e.code}
+        return {"available": False, "mode": mode, "reason": str(e), "code": e.code}
 
 
 def api_health(_d):

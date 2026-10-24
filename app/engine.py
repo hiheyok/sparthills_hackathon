@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from itertools import permutations
 from pathlib import Path
 
-from geo import eta_min, fmt_clock, haversine_km
+from geo import DEFAULT_MODE, MODES, eta_min, fmt_clock, haversine_km, reach_km
 
 DATA = Path(__file__).parent / "data"
 
@@ -136,7 +136,8 @@ def _store_view(s, dist_km, eta, until, q, age, source, qty_wanted):
     }
 
 
-def search_item(item_id, qty, lat, lng, radius_km, now_min, reports, now_ts, limit=8):
+def search_item(item_id, qty, lat, lng, radius_km, now_min, reports, now_ts, limit=8, mode=DEFAULT_MODE):
+    radius_km = reach_km(radius_km, mode)          # nobody is sent 8 km on foot
     cands = []
     stats = {"checked": 0, "closed": 0, "out": 0, "no_item": 0}
     for s in STORES:
@@ -144,7 +145,7 @@ def search_item(item_id, qty, lat, lng, radius_km, now_min, reports, now_ts, lim
         if d > radius_km:
             continue
         stats["checked"] += 1
-        eta = eta_min(d)
+        eta = eta_min(d, mode)
         is_open, until, _ = open_state(s, now_min + eta, _reported_closed(s["id"], reports))
         st = stock_of(s, item_id, reports, now_ts)
         if st is None:
@@ -174,14 +175,14 @@ def search_item(item_id, qty, lat, lng, radius_km, now_min, reports, now_ts, lim
             "total_matches": len(cands), "stats": stats}
 
 
-def nearest_available(item_id, lat, lng, now_min, reports, now_ts):
+def nearest_available(item_id, lat, lng, now_min, reports, now_ts, mode=DEFAULT_MODE):
     """Nearest open store with stock anywhere (used to explain a gap)."""
     best = None
     for s in STORES:
         d = haversine_km(lat, lng, s["lat"], s["lng"])
         if best is not None and d >= best[0]:
             continue
-        eta = eta_min(d)
+        eta = eta_min(d, mode)
         is_open, until, _ = open_state(s, now_min + eta, _reported_closed(s["id"], reports))
         st = stock_of(s, item_id, reports, now_ts)
         if not is_open or st is None or st[0] <= 0:
@@ -190,38 +191,42 @@ def nearest_available(item_id, lat, lng, now_min, reports, now_ts):
     return best[1] if best else None
 
 
-def search(needs, lat, lng, radius_km, now_min, reports, now_ts):
+def search(needs, lat, lng, radius_km, now_min, reports, now_ts, mode=DEFAULT_MODE):
     out = []
     for n in needs:
         item = CATALOG[n["item_id"]]
-        r = search_item(n["item_id"], n.get("qty", 1), lat, lng, radius_km, now_min, reports, now_ts)
+        r = search_item(n["item_id"], n.get("qty", 1), lat, lng, radius_km, now_min, reports, now_ts, mode=mode)
         r.update({
             "name": item["name"], "label": n.get("label") or item["name"], "policy": item["policy"],
             "priority": n.get("priority", 2), "qty": n.get("qty", 1),
             "inferred": bool(n.get("inferred")), "why": n.get("why", ""),
         })
         if r["status"] == "gap":
-            r["nearest_any"] = nearest_available(n["item_id"], lat, lng, now_min, reports, now_ts)
+            r["nearest_any"] = nearest_available(n["item_id"], lat, lng, now_min, reports, now_ts, mode)
         out.append(r)
     return out
 
 
-def in_stock_nearby(lat, lng, radius_km, now_min, reports, now_ts, exclude=()):
+def in_stock_nearby(lat, lng, radius_km, now_min, reports, now_ts, exclude=(), mode=DEFAULT_MODE):
     """{item_id: nearest store view} for every catalog item with stock inside radius.
     This is the candidate pool the AI may choose substitutes from."""
     pool = {}
     for item_id in CATALOG:
         if item_id in exclude:
             continue
-        r = search_item(item_id, 1, lat, lng, radius_km, now_min, reports, now_ts, limit=1)
+        r = search_item(item_id, 1, lat, lng, radius_km, now_min, reports, now_ts, limit=1, mode=mode)
         if r["stores"]:
             pool[item_id] = r["stores"][0]
     return pool
 
 
 # ---------------------------------------------------------------- plan
-def build_plan(needs, alternatives, lat, lng, radius_km, now_min, reports, now_ts):
-    results = search(needs, lat, lng, radius_km, now_min, reports, now_ts)
+def build_plan(needs, alternatives, lat, lng, radius_km, now_min, reports, now_ts, mode=DEFAULT_MODE):
+    """The plan for one way of travelling. Driving and walking plans differ: on foot the range is
+    shorter, every leg takes longer, and a store that is open when a car arrives can be closed by
+    the time a walker does."""
+    radius_km = reach_km(radius_km, mode)
+    results = search(needs, lat, lng, radius_km, now_min, reports, now_ts, mode)
     alt_by_item = {a["for_item"]: a for a in (alternatives or [])}
     chosen, alts_out = [], []
     quantity_checks = {}
@@ -249,7 +254,7 @@ def build_plan(needs, alternatives, lat, lng, radius_km, now_min, reports, now_t
                 continue
             if allowed is not None and opt["item_id"] not in allowed:
                 continue  # caution items accept only curated substitutes, whoever proposed the option
-            o_res = search_item(opt["item_id"], 1, lat, lng, radius_km, now_min, reports, now_ts)
+            o_res = search_item(opt["item_id"], 1, lat, lng, radius_km, now_min, reports, now_ts, mode=mode)
             if o_res["status"] == "gap":
                 continue  # a substitute nobody nearby has is not a substitute
             o = dict(opt)
@@ -278,7 +283,7 @@ def build_plan(needs, alternatives, lat, lng, radius_km, now_min, reports, now_t
             o.pop("all_stores", None)
         alts_out.append(entry)
 
-    route = plan_route(chosen, lat, lng, now_min, reports)
+    route = plan_route(chosen, lat, lng, now_min, reports, mode=mode)
     shortfalls = route.pop("shortfalls")
     placed = {it["key"] for stop in route["stops"] for it in stop["items"]}
     unresolved = [{"item_id": r["item_id"], "name": r["name"], "label": r["label"],
@@ -295,18 +300,18 @@ def build_plan(needs, alternatives, lat, lng, radius_km, now_min, reports, now_t
         "unresolved": len(unresolved),
     }
     return {"results": results, "alternatives": alts_out, "route": route, "unresolved": unresolved,
-            "shortfalls": shortfalls, "summary": summary,
+            "shortfalls": shortfalls, "summary": summary, "mode": mode,
             "location": {"lat": lat, "lng": lng, "radius_km": radius_km}, "start_min": now_min}
 
 
-def _simulate(order, lat, lng, now_min, reports):
-    """Drive the ordered stops. Returns per-leg info, or None if any store would
+def _simulate(order, lat, lng, now_min, reports, mode=DEFAULT_MODE):
+    """Travel the ordered stops. Returns per-leg info, or None if any store would
     be closed when we get there."""
     clock, cur_lat, cur_lng, legs = now_min, lat, lng, []
     for sid in order:
         s = STORE_BY_ID[sid]
         d = haversine_km(cur_lat, cur_lng, s["lat"], s["lng"])
-        leg = eta_min(d)
+        leg = eta_min(d, mode)
         clock += leg
         ok, until, _ = open_state(s, clock, _reported_closed(sid, reports))
         if not ok:
@@ -317,7 +322,7 @@ def _simulate(order, lat, lng, now_min, reports):
     return legs
 
 
-def plan_route(chosen, lat, lng, now_min, reports, max_stops=4):
+def plan_route(chosen, lat, lng, now_min, reports, max_stops=4, mode=DEFAULT_MODE):
     """Cheapest-insertion set cover. Repeatedly add the store (at the best
     position in the route) that covers the most urgent still-missing units per
     extra minute. Every candidate route is re-simulated so that each store is
@@ -356,7 +361,7 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4):
                     continue
                 for pos in range(len(order) + 1):
                     cand = order[:pos] + [sid] + order[pos:]
-                    legs = _simulate(cand, lat, lng, now_min, reports)
+                    legs = _simulate(cand, lat, lng, now_min, reports, mode)
                     if legs is None:
                         continue
                     added = sum(l["min"] for l in legs) - base_min + SHOPPING_MIN
@@ -366,7 +371,7 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4):
             if best is None:
                 break
             _, order, sid = best
-            base_min = sum(l["min"] for l in _simulate(order, lat, lng, now_min, reports))
+            base_min = sum(l["min"] for l in _simulate(order, lat, lng, now_min, reports, mode))
             for k in store_keys[sid]:
                 left[k] = max(0, left[k] - stock[(sid, k)])
 
@@ -384,7 +389,7 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4):
     if 1 < len(order) <= max_stops:
         best_perm = None
         for perm in permutations(order):
-            legs = _simulate(list(perm), lat, lng, now_min, reports)
+            legs = _simulate(list(perm), lat, lng, now_min, reports, mode)
             if legs is None:
                 continue
             taken, delay = set(), 0.0
@@ -408,7 +413,7 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4):
                 assigned[sid].append((k, units))
                 left[k] -= units
     order = [sid for sid in order if assigned[sid]]
-    legs = _simulate(order, lat, lng, now_min, reports) or []
+    legs = _simulate(order, lat, lng, now_min, reports, mode) or []
 
     stops = []
     for idx, (sid, leg) in enumerate(zip(order, legs), start=1):
@@ -433,19 +438,23 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4):
             "leg_km": round(leg["km"], 1), "leg_min": leg["min"], "arrive": fmt_clock(leg["arrive"]),
             "open_note": leg["until"], "items": items,
         })
-    total_drive = sum(l["min"] for l in legs)
+    total_travel = sum(l["min"] for l in legs)
     shortfalls = [{"key": k, "item_id": c["item_id"], "name": c["name"], "label": c["label"],
                    "priority": c["priority"], "qty": c["qty"], "found": c["qty"] - left[k], "missing": left[k]}
                   for k, c in by_key.items() if 0 < left[k] < c["qty"]]
-    return {"stops": stops, "total_km": round(sum(l["km"] for l in legs), 1),
-            "total_drive_min": total_drive, "total_min": total_drive + SHOPPING_MIN * len(stops),
+    return {"stops": stops, "mode": mode, "total_km": round(sum(l["km"] for l in legs), 1),
+            "total_travel_min": total_travel,
+            "total_drive_min": total_travel,      # the original name, kept for saved plans and older clients
+            "total_min": total_travel + SHOPPING_MIN * len(stops),
             "leaves": fmt_clock(now_min), "shortfalls": shortfalls}
 
 
 def render_plan_text(plan, brief=None, urgent=False):
     """Plain-text version of the plan for SMS / clipboard / printing. Built
     from the structured plan (not from AI prose) so it is always consistent."""
-    lines = ["SUPPLYLINE PLAN (" + fmt_clock(plan["start_min"]) + ")"]
+    mode = plan.get("mode", DEFAULT_MODE)
+    word = MODES[mode]["word"]
+    lines = ["SUPPLYLINE PLAN (" + fmt_clock(plan["start_min"]) + (", on foot" if mode == "walking" else "") + ")"]
     if urgent:
         lines.append("FIRST: if anyone is in danger, call 911 and get to safety before shopping.")
     if brief and brief.get("headline"):
@@ -459,7 +468,7 @@ def render_plan_text(plan, brief=None, urgent=False):
         st = stop["store"]
         names = ", ".join(("%s%s (instead of %s)" % (i["name"], units(i), i["replaces_name"]) if i["is_alt"]
                            else i["name"] + units(i)) for i in stop["items"])
-        lines.append("%d. %s, %d min, %s km, arrive %s" % (stop["order"], st["name"], stop["leg_min"], stop["leg_km"], stop["arrive"]))
+        lines.append("%d. %s, %d min %s, %s km, arrive %s" % (stop["order"], st["name"], stop["leg_min"], word, stop["leg_km"], stop["arrive"]))
         lines.append("   Get: " + names)
     for u in plan["unresolved"]:
         if u.get("reason") == "quantity_unverified":

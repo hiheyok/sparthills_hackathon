@@ -18,9 +18,9 @@ The critical service is **getting essential supplies to a household during a dis
 
 1. **Understands a messy request.** Free text like "dad uses insulin, baby needs formula" becomes a list of supplies from a fixed 70-item catalog, and it adds the needs people forget (a cooler and ice for the insulin).
 2. **Finds real availability.** For each item it checks stock, how old the stock data is, and whether the store will still be open when you arrive.
-3. **Plans a route.** Up to 4 stops that cover everything, with the most urgent items first. The map draws the fastest road route through them in that order, and one tap opens the whole trip in Google Maps for turn-by-turn with live traffic.
+3. **Plans a route, on foot or by car.** Up to 4 stops that cover everything, with the most urgent items first. Drive and Walk are two separate plans, not one plan with two labels: on foot the range is shorter (3 km), every leg takes longer, and a store that is open when a car arrives can be closed by the time a walker does. The map draws a road route for driving and a footpath route for walking, and one tap opens the trip in Google Maps for turn-by-turn.
 4. **Finds alternatives when something is out.** Amazon Bedrock picks substitutes, but only from items confirmed in stock near you, and only from a hand-written safe list for risky items.
-5. **Explains it in plain language.** A short briefing, a follow-up question box, and copy, text-message and print options.
+5. **Explains it in plain language.** A short briefing for each way of getting there, an assistant you can ask about your own situation (for example "should I walk or drive?"), and copy, text-message and print options.
 6. **Takes neighbor reports.** "Has it", "Running low", "Sold out", "It is closed". Reports expire after 6 hours.
 7. **Never gambles with safety.** See below.
 
@@ -85,7 +85,13 @@ bash scripts/destroy.sh               # remove everything when you are done
 
 Optional settings (environment variables for `deploy.sh`): `AWS_REGION`, `STACK_NAME`, `BEDROCK_REGION`, `BEDROCK_MODEL_IDS` (comma separated), `GUARDRAIL_ID`.
 
-Road routing can be tuned on the function with `ROAD_ROUTING=off` (never call the routing service) or `ROAD_ROUTING_URL` (point at your own OSRM-compatible server).
+Road routing can be tuned on the function with `ROAD_ROUTING=off` (never call a routing service, for walking or driving), `ROAD_ROUTING_URL` (point driving at your own OSRM-compatible server) or `ROAD_ROUTING_WALK_URL` (the same for walking; it must serve a foot profile).
+
+### One AI agent per task
+
+Each task has its own agent with its own prompt, output size, temperature and time budget, and you can give it its own models. Set `BEDROCK_MODEL_IDS_<TASK>` on the function (comma separated, like `BEDROCK_MODEL_IDS`) for `UNDERSTAND`, `ALTERNATIVES`, `BRIEF` or `FOLLOWUP`, for example a smaller, faster model for the short answers of `FOLLOWUP`. A task with no setting uses `BEDROCK_MODEL_IDS`, then the defaults below. `/api/health` lists every agent and its models.
+
+The driving and walking plans are built at the same time, each by its own substitutes and briefing agents, so asking for both takes about as long as asking for one. In the browser the plan on screen is built step by step and the other one in the background, so switching is instant. The assistant reads your situation on the server, so it can answer as soon as your request is understood, before either plan is ready.
 
 ### Which models
 
@@ -121,7 +127,8 @@ The video script is in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 
 * **The data is fictional.** 53 invented stores in 16 San José neighborhoods and made-up stock, generated with a fixed seed (`scripts/gen_data.py`). It shows how the app behaves in a shortage. It is not a real inventory feed.
 * **The demo stock ages in real time.** Each record's "checked N minutes ago" is counted from one snapshot time (the deploy time on AWS, the server start locally), so "fresh" stock turns into "call ahead" after a few hours. A neighbor report stays in force for its 6 hours, because it is compared with that same snapshot time. Redeploy to refresh the demo data.
-* **Drive times in the plan are estimates** (straight-line distance, a detour factor and a slow fixed speed). There is no live traffic and no road closures.
+* **Drive and walk times in the plan are estimates** (straight-line distance, a detour factor and a slow fixed speed: 28 km/h by car, 4 km/h on foot). There is no live traffic, no road closures, and walking knows nothing about hills, stairs or whether a footpath is open. Walking plans stay within 3 km of you.
+* **The walking route uses a second free public service.** Footpaths come from the OpenStreetMap community's routing server at routing.openstreetmap.de, because the public OSRM demo server only routes cars (it ignores the profile in the URL). Its terms ask for the OpenStreetMap credit and a "fix the map" link (both are shown), a valid user agent, no more than one request per second and no heavy use, so the app asks for the path of the plan on screen first and the other one after it. That is fine for a demo; for real traffic run your own OSRM with a foot profile (`ROAD_ROUTING_WALK_URL`) or use Amazon Location Service.
 * **The road route on the map comes from a free public service.** It uses the public OSRM demo server with OpenStreetMap data. That service has no uptime promise and no live traffic, so if it is down the map shows a straight dashed line and says so. Its time can differ from the plan's estimate, which is deliberately slower and includes shopping time. Your function (not the browser) calls it, so only the coordinates of your location and the stops are sent, never your IP address. For production use Amazon Location Service.
 * **The rules fallback is much weaker than the model.** It matches keywords. It is there so the app is never dead, not to replace the model. Its substitutes come from a short hand-written list (`FALLBACK_SUBS` in `ai.py`), so many items get none. Batteries never get one, because it cannot tell what they are for and a different size will not fit.
 * **Neighbor reports are unverified.** Anyone can post one, so a bad actor could mislead. The only protection today is a 6-hour expiry, a per-IP rate limit and input validation.
@@ -140,10 +147,10 @@ app/
   handler.py     Lambda entry point: routes, validation, rate limit, security headers, static files
   engine.py      Search, store hours, route planning, safety policy enforcement (no AI)
   ai.py          Amazon Bedrock stages, validation, model fallback, rules fallback
-  roads.py       Road route for the map (public OSRM service, fails soft)
+  roads.py       Driving and walking routes for the map (public OSRM services, fail soft)
   road_transport.py  HTTPS fetch, with a native Windows fallback for connection failures
   store.py       Neighbor reports (DynamoDB, or in memory locally)
-  geo.py         Distance and travel time
+  geo.py         Distance, and travel time for driving and walking
   data/          catalog.json, stores.json, places.json (generated)
   static/        The web app: index.html, app.js, styles.css, service worker, map, fonts
 infra/template.yaml   CloudFormation stack

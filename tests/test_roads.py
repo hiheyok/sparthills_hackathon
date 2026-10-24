@@ -4,6 +4,7 @@ import os
 import socket
 import ssl
 import sys
+import threading
 import unittest
 import urllib.error
 from unittest import mock
@@ -98,6 +99,62 @@ class RoadsClient(unittest.TestCase):
             with self.assertRaises(roads.RoadsUnavailable):
                 roads.fetch_route([A, B])
 
+    def test_walking_asks_the_foot_service_and_driving_asks_the_car_service(self):
+        with mock.patch.object(roads, "_open", return_value=osrm_ok()) as m:
+            walk, drive = roads.fetch_route([A, B], "walking"), roads.fetch_route([A, B])
+        walk_url, drive_url = (c[0][0] for c in m.call_args_list)
+        self.assertTrue(walk_url.startswith("https://routing.openstreetmap.de/routed-foot/route/v1/driving/"), walk_url)
+        self.assertTrue(drive_url.startswith("https://router.project-osrm.org/route/v1/driving/"), drive_url)
+        self.assertEqual((walk["mode"], drive["mode"]), ("walking", "driving"))
+        self.assertIn("footpaths", walk["source"])
+        self.assertIn("no live conditions", walk["source"])
+        self.assertIn("no live traffic", drive["source"])
+
+    def test_the_walking_service_can_be_pointed_somewhere_else(self):
+        with mock.patch.object(roads, "WALK_URL", "http://127.0.0.1:5001"), \
+                mock.patch.object(roads, "_open", return_value=osrm_ok()) as m:
+            roads.fetch_route([A, B], "walking")
+        self.assertTrue(m.call_args[0][0].startswith("http://127.0.0.1:5001/route/v1/driving/"))
+
+    def test_walking_and_driving_routes_are_cached_separately(self):
+        with mock.patch.object(roads, "_open", return_value=osrm_ok()) as m:
+            for mode in ("walking", "driving", "walking", "driving"):
+                roads.fetch_route([A, B], mode)
+        self.assertEqual(m.call_count, 2)
+        self.assertEqual({k[0] for k in roads._cache}, {"walking", "driving"})
+
+    def test_one_switch_turns_off_both_and_unknown_modes_are_refused_without_a_network_call(self):
+        os.environ["ROAD_ROUTING"] = "off"
+        with mock.patch.object(roads, "_open") as m:
+            for mode in ("driving", "walking"):
+                with self.assertRaises(roads.RoadsUnavailable) as caught:
+                    roads.fetch_route([A, B], mode)
+                self.assertEqual(caught.exception.code, "disabled")
+            os.environ.pop("ROAD_ROUTING")
+            with self.assertRaises(roads.RoadsUnavailable) as caught:
+                roads.fetch_route([A, B], "hovercraft")
+            self.assertEqual(caught.exception.code, "bad_mode")
+        m.assert_not_called()
+
+    def test_walking_and_driving_requests_at_the_same_time_do_not_corrupt_the_cache(self):
+        errors = []
+
+        def worker(n):
+            try:
+                for i in range(40):
+                    roads.fetch_route([A, (37.30 + n * 0.001 + i * 0.0001, -121.9)], ("walking", "driving")[i % 2])
+            except Exception as exc:  # noqa: BLE001 - any failure is the bug
+                errors.append(repr(exc))
+
+        with mock.patch.object(roads, "CACHE_MAX", 6), mock.patch.object(roads, "_open", return_value=osrm_ok()):
+            threads = [threading.Thread(target=worker, args=(n,)) for n in range(8)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join()
+        self.assertEqual(errors, [])
+        self.assertLessEqual(len(roads._cache), 6)
+
 
 class RouteEndpoint(unittest.TestCase):
     def setUp(self):
@@ -121,6 +178,30 @@ class RouteEndpoint(unittest.TestCase):
         self.assertTrue(body["available"])
         self.assertGreater(len(body["path"]), 1)
         self.assertIn("no live traffic", body["source"])
+
+    def test_walking_mode(self):
+        with mock.patch.object(roads, "_open", return_value=osrm_ok()) as m:
+            status, body = self.post({**self.pts(A, B), "mode": "walking"})
+            status_default, body_default = self.post(self.pts(A, B))
+        self.assertEqual((status, body["available"], body["mode"]), (200, True, "walking"))
+        self.assertIn("footpaths", body["source"])
+        self.assertEqual(body_default["mode"], "driving")             # no mode means driving, as before
+        self.assertEqual(m.call_count, 2)
+
+    def test_walking_outage_names_its_mode_and_is_not_an_error(self):
+        with mock.patch.object(roads, "_open", side_effect=urllib.error.URLError("down")):
+            status, body = self.post({**self.pts(A, B), "mode": "walking"})
+        self.assertEqual((status, body["available"], body["mode"]), (200, False, "walking"))
+
+    def test_bad_mode_and_long_walks_are_refused_before_any_network_call(self):
+        far = (37.3382 + 0.2, -121.8863)                                # about 22 km: a drive, not a walk
+        with mock.patch.object(roads, "_open") as m:
+            for body in ({**self.pts(A, B), "mode": "flying"}, {**self.pts(A, B), "mode": ["walking"]},
+                         {**self.pts(A, far), "mode": "walking"}):
+                self.assertEqual(self.post(body)[0], 400, body)
+        m.assert_not_called()
+        with mock.patch.object(roads, "_open", return_value=osrm_ok()):
+            self.assertEqual(self.post(self.pts(A, far))[0], 200)       # the same hop is fine by car
 
     def test_routing_outage_is_not_an_error(self):
         with mock.patch.object(roads, "_open", side_effect=urllib.error.URLError("down")):

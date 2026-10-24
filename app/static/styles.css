@@ -153,6 +153,18 @@ textarea:focus-visible, select:focus-visible { outline: 3px solid var(--route); 
 .facts-row { display: flex; flex-wrap: wrap; gap: 2px 16px; margin: 8px 0 12px; font-family: var(--display); font-weight: 700; font-size: .95rem; }
 .facts-row span { white-space: nowrap; }
 
+/* ---------- drive / walk: two plans, one switch ---------- */
+.mode:empty { display: none; }
+.mode { margin: 4px 0 12px; }
+.mode-switch { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; max-width: 520px; }
+.mode-btn { font: inherit; text-align: left; display: grid; gap: 1px; min-height: 58px; padding: 8px 14px; cursor: pointer;
+  color: var(--ink); background: var(--surface); border: 2px solid var(--ink-2); border-radius: 8px; }
+.mode-btn:hover { background: var(--route-tint); border-color: var(--route); }
+.mode-btn[aria-pressed="true"] { color: var(--route-ink); background: var(--route); border-color: var(--route); }
+.mode-btn:focus-visible { outline: 3px solid var(--route); outline-offset: 2px; }
+.mode-name { font: 800 1.05rem var(--display); }
+.mode-sub { font-size: .86rem; }
+
 .route { list-style: none; margin: 0; padding: 0; }
 .route > li { position: relative; padding: 0 0 16px 46px; }
 .route > li:last-child { padding-bottom: 0; }
@@ -287,7 +299,7 @@ td.num { font-variant-numeric: tabular-nums; }
 .noscript { padding: 16px; background: var(--alert-tint); }
 
 @media print {
-  .bar, .sos, .ask, .progress, .col-map, .actions, .followup, .trace, .try, .stop-actions, .toast, .foot { display: none !important; }
+  .bar, .sos, .ask, .progress, .col-map, .actions, .followup, .trace, .try, .stop-actions, .toast, .foot, .mode { display: none !important; }
   body { background: #fff; color: #000; }
   .shell { display: block; padding: 0; }
 }

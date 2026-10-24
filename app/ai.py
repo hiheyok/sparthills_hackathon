@@ -28,6 +28,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 
 from engine import CATALOG, CATALOG_LIST
@@ -43,6 +44,7 @@ DEFAULT_MODELS = [
 
 _client = None           # a fake injected by tests; otherwise real clients are built on demand
 _clients = {}            # whole-second timeout -> boto3 client
+_client_lock = threading.Lock()
 _bad_until = {}          # model id -> unix time when we may try it again
 _creds_bad_until = 0.0   # no credentials: skip Bedrock entirely for a short while
 
@@ -74,10 +76,29 @@ def ai_mode():
     return (os.environ.get("AI_MODE") or "auto").strip().lower()
 
 
-def model_chain():
-    raw = os.environ.get("BEDROCK_MODEL_IDS", "")
-    ids = [m.strip() for m in raw.split(",") if m.strip()]
-    return ids or list(DEFAULT_MODELS)
+# One agent per task. Each has its own prompt (next to the function that uses it), output size,
+# temperature, time budget and, if you want one, its own model chain. Agents never wait for one
+# another: the driving plan, the walking plan and the assistant all run at the same time, and a
+# slow or failing one cannot hold up the rest. Only what a model's health (access denied,
+# throttled) says about that model is shared, because that is true for every task that uses it.
+AGENTS = {
+    "understand":   {"max_tokens": 1500, "temperature": 0.2, "budget_s": 24.0},
+    "alternatives": {"max_tokens": 1800, "temperature": 0.2, "budget_s": 24.0},
+    "brief":        {"max_tokens": 1400, "temperature": 0.3, "budget_s": 24.0},
+    "followup":     {"max_tokens": 500,  "temperature": 0.3, "budget_s": 24.0},
+}
+
+
+def _ids(raw):
+    return [m.strip() for m in (raw or "").split(",") if m.strip()]
+
+
+def model_chain(stage=None):
+    """Models to try, in order. BEDROCK_MODEL_IDS_<TASK> (for example BEDROCK_MODEL_IDS_FOLLOWUP)
+    gives one task its own chain, such as a faster, cheaper model for short answers. Otherwise
+    BEDROCK_MODEL_IDS, otherwise the defaults."""
+    own = _ids(os.environ.get("BEDROCK_MODEL_IDS_" + stage.upper())) if stage else []
+    return own or _ids(os.environ.get("BEDROCK_MODEL_IDS")) or list(DEFAULT_MODELS)
 
 
 def region():
@@ -86,7 +107,8 @@ def region():
 
 
 def status():
-    return {"mode": ai_mode(), "region": region(), "models": model_chain()}
+    return {"mode": ai_mode(), "region": region(), "models": model_chain(),
+            "agents": {name: {**cfg, "models": model_chain(name)} for name, cfg in AGENTS.items()}}
 
 
 def set_client(client):
@@ -107,15 +129,16 @@ def _get_client(timeout_s=MAX_ATTEMPT_S):
     if _client is not None:
         return _client
     secs = max(1, min(int(MAX_ATTEMPT_S), int(timeout_s)))
-    if secs not in _clients:
-        import boto3
-        from botocore.config import Config
-        connect = min(3, max(1, secs // 4))
-        _clients[secs] = boto3.client(
-            "bedrock-runtime", region_name=region(),
-            config=Config(connect_timeout=connect, read_timeout=max(1, secs - connect),
-                          retries={"total_max_attempts": 1, "mode": "standard"}))
-    return _clients[secs]
+    with _client_lock:   # agents start together; boto3 must not build its first clients from two threads at once
+        if secs not in _clients:
+            import boto3
+            from botocore.config import Config
+            connect = min(3, max(1, secs // 4))
+            _clients[secs] = boto3.client(
+                "bedrock-runtime", region_name=region(),
+                config=Config(connect_timeout=connect, read_timeout=max(1, secs - connect),
+                              retries={"total_max_attempts": 1, "mode": "standard"}))
+        return _clients[secs]
 
 
 # ------------------------------------------------------------ small helpers
@@ -185,11 +208,16 @@ def _converse(model, system, messages, max_tokens, temperature, timeout_s=MAX_AT
     return _get_client(timeout_s).converse(**kw)
 
 
-def call_model(stage, system, user, parse, max_tokens=1600, temperature=0.2, budget_s=24.0):
-    """Try each model in the chain. Per model: one call, plus one repair retry if
-    the reply fails `parse` (which must raise ValueError on bad output).
-    Returns (parsed, trace) or raises AIUnavailable."""
+def call_model(stage, system, user, parse, max_tokens=None, temperature=None, budget_s=None, lane=None):
+    """Run one task's agent: try each model in its chain. Per model: one call, plus one repair
+    retry if the reply fails `parse` (which must raise ValueError on bad output). Output size,
+    temperature and time budget come from AGENTS[stage] unless given. `lane` ("driving" or
+    "walking") only labels the trace. Returns (parsed, trace) or raises AIUnavailable."""
     global _creds_bad_until
+    cfg = AGENTS.get(stage, {})
+    max_tokens = max_tokens or cfg.get("max_tokens", 1600)
+    temperature = cfg.get("temperature", 0.2) if temperature is None else temperature
+    budget_s = budget_s or cfg.get("budget_s", 24.0)
     t0 = time.monotonic()
     tried = []
     if ai_mode() == "off":
@@ -198,7 +226,7 @@ def call_model(stage, system, user, parse, max_tokens=1600, temperature=0.2, bud
         raise AIUnavailable([{"model": None, "error": "no usable AWS credentials (cached)"}])
     tok_in = tok_out = calls = 0
 
-    for model in model_chain():
+    for model in model_chain(stage):
         if time.time() < _bad_until.get(model, 0):
             tried.append({"model": model, "error": "skipped: recently unavailable"})
             continue
@@ -235,19 +263,25 @@ def call_model(stage, system, user, parse, max_tokens=1600, temperature=0.2, bud
                     ]
                     continue
                 break
-            trace = {"stage": stage, "mode": "bedrock", "model": model, "region": region(),
+            trace = {"stage": stage, "agent": stage, "mode": "bedrock", "model": model, "region": region(),
                      "ms": int((time.monotonic() - t0) * 1000), "calls": calls,
                      "tokens_in": tok_in, "tokens_out": tok_out,
                      "fell_back_from": [t["model"] for t in tried if t.get("model") and t["model"] != model]}
+            if lane:
+                trace["lane"] = lane
             return parsed, trace
     raise AIUnavailable(tried)
 
 
-def _fallback_trace(stage, exc, t0):
+def _fallback_trace(stage, exc, t0, lane=None):
     tried = getattr(exc, "tried", [])
     reason = tried[-1]["error"] if tried else str(exc)
-    return {"stage": stage, "mode": "rules", "model": None, "ms": int((time.monotonic() - t0) * 1000),
-            "calls": 0, "tokens_in": 0, "tokens_out": 0, "reason": reason, "tried": tried[-6:]}
+    trace = {"stage": stage, "agent": stage, "mode": "rules", "model": None,
+             "ms": int((time.monotonic() - t0) * 1000), "calls": 0, "tokens_in": 0, "tokens_out": 0,
+             "reason": reason, "tried": tried[-6:]}
+    if lane:
+        trace["lane"] = lane
+    return trace
 
 
 # -------------------------------------------------------------- sanitizing
@@ -389,7 +423,7 @@ def understand(text):
         return intent
 
     try:
-        intent, trace = call_model("understand", system, user, parse, max_tokens=1500)
+        intent, trace = call_model("understand", system, user, parse)
     except AIUnavailable as exc:
         intent = fallback_understand(text)
         trace = _fallback_trace("understand", exc, t0)
@@ -460,6 +494,7 @@ SAFETY RULES (never break these)
 - A missing item with policy "none" (prescriptions, medical oxygen) has NO substitutes. Return an empty "options" list and put practical next steps in "escalate".
 - A missing item with policy "caution" (infant formula, over-the-counter medicine, fuel) may be replaced ONLY by an id listed in that item's "allowed_substitutes" (an empty list means no substitute at all). Rank and explain within that list; never go outside it. Add a caution that names who to check with (pediatrician, pharmacist) when relevant.
 - Think about the situation: if power or water is out, prefer substitutes that need neither.
+- If situation.travel_mode is "walking", the person is on foot: prefer substitutes that are light and easy to carry.
 - Do not give medication doses or chemical mixing ratios. Point to the product label, CDC, ready.gov, or a pharmacist.
 - "no_purchase_tips" are short things they can do without buying anything. Only include well-established guidance, otherwise leave the list empty.
 - fit: "strong" = does the same job, "partial" = covers part of it, "workaround" = temporary or improvised.
@@ -524,8 +559,10 @@ RELATED_TAGS = {
 }
 
 
-def alternatives(gaps, pool, intent):
+def alternatives(gaps, pool, intent, mode="driving"):
     """gaps: [{item_id,label,priority,why}], pool: {item_id: nearest store view}.
+    `mode` is the lane (driving or walking) this agent is working for: a walker's pool is
+    smaller and the model is told to prefer things that are easy to carry.
     -> (list of alternative entries, trace)"""
     t0 = time.monotonic()
     gap_ids = [g["item_id"] for g in gaps]
@@ -551,17 +588,17 @@ def alternatives(gaps, pool, intent):
         if cat["policy"] == "caution":
             m["allowed_substitutes"] = cat.get("safe_subs") or []
         missing.append(m)
-    situation = {"disaster": intent.get("disaster"), "household": intent.get("household")}
+    situation = {"disaster": intent.get("disaster"), "household": intent.get("household"), "travel_mode": mode}
     user = ("SITUATION\n" + json.dumps(situation, ensure_ascii=False) +
             "\n\nMISSING (nobody nearby has these in stock)\n" + json.dumps(missing, ensure_ascii=False) +
             "\n\nAVAILABLE (confirmed in stock nearby)\n" + json.dumps(available, ensure_ascii=False))
     try:
         alts, trace = call_model("alternatives", ALT_SYSTEM, user,
                                  lambda raw: _alt_validator(set(gap_ids), set(candidates))(extract_json(raw)),
-                                 max_tokens=1800)
+                                 lane=mode)
     except AIUnavailable as exc:
         alts = fallback_alternatives(gaps, pool)
-        trace = _fallback_trace("alternatives", exc, t0)
+        trace = _fallback_trace("alternatives", exc, t0, mode)
     return alts, trace
 
 
@@ -687,9 +724,10 @@ BRIEF_SYSTEM = """You write the short action briefing in SupplyLine for a person
 
 Use ONLY the facts in PLAN. Do not invent stores, hours, stock, phone numbers or prices. If a fact is missing, leave it out.
 Voice: calm, direct, plain words (about 7th-grade reading level), sentence case, no exclamation marks, no emoji.
-Safety first: if situation.urgent_safety.flag is true, the FIRST safety note must tell them to get safe and call 911 before driving for supplies. Add 1 to 3 more safety notes that are well established for this disaster and these items (for example: wildfire smoke -> N95 masks help, keep windows closed; generators and charcoal outdoors only; no candles if you smell gas; keep insulin cool but never frozen). No medication doses or chemical mixing ratios.
+Safety first: if situation.urgent_safety.flag is true, the FIRST safety note must tell them to get safe and call 911 before going out for supplies. Add 1 to 3 more safety notes that are well established for this disaster and these items (for example: wildfire smoke -> N95 masks help, keep windows closed; generators and charcoal outdoors only; no candles if you smell gas; keep insulin cool but never frozen). No medication doses or chemical mixing ratios.
 If an item was swapped for an alternative, say so in that stop's text and what to check (ask the pharmacist, confirm the stove type, and so on).
 If items could not be found, use "if_stuck" for what to do next (call ahead, ask staff for alternatives, dial 211), at most 3 short bullets.
+PLAN.travel_mode is "driving" or "walking", and every time in PLAN is for that way of travelling. If it is "walking" the person is on foot: say so, mention how long the walk is when it is over 30 minutes, suggest carrying heavy items (water, cases, fuel) in a backpack or splitting the trip, and never suggest driving. If it is "driving", do not mention walking.
 If PLAN.partly_available lists an item, the route cannot supply the full amount: say how many are still missing in the summary, and never say everything is covered. Use quantity_here for how many to buy at that stop.
 If PLAN.quantity_unconfirmed lists an item, preserve the original requested quantity and tell the person to confirm equivalent package amounts with the store. Those substitute suggestions are not in the route and do not cover the need. Never invent a quantity conversion.
 
@@ -698,7 +736,9 @@ Respond with ONE JSON object and nothing else:
 Include exactly one "steps" entry per stop in PLAN, in the same order."""
 
 
-def plan_for_prompt(plan, intent):
+def plan_facts(plan):
+    """What a model may know about one plan (one way of travelling). Nothing here is invented:
+    it is the engine's own output, trimmed."""
     stops = [{
         "stop": s["order"], "store": s["store"]["name"], "type": s["store"]["type"],
         "minutes_to_get_there": s["leg_min"], "arrive": s["arrive"], "hours": s["open_note"],
@@ -709,8 +749,10 @@ def plan_for_prompt(plan, intent):
                  "neighbor_reported": i["source"] == "community"} for i in s["items"]],
     } for s in plan["route"]["stops"]]
     return {
-        "situation": {"disaster": intent.get("disaster"), "household": intent.get("household"),
-                      "urgent_safety": intent.get("urgent_safety")},
+        "travel_mode": plan.get("mode", "driving"),
+        "total_travel_minutes": plan["route"].get("total_travel_min", plan["route"].get("total_drive_min")),
+        "total_minutes_with_shopping": plan["route"]["total_min"],
+        "search_radius_km": plan["location"]["radius_km"],
         "stops": stops,
         "not_found_nearby": [{"item": u["name"], "priority": u["priority"]} for u in plan["unresolved"]
                              if u.get("reason") != "quantity_unverified"],
@@ -720,6 +762,11 @@ def plan_for_prompt(plan, intent):
                               "priority": s["priority"]} for s in plan.get("shortfalls", [])],
         "no_substitute_policy": [a["for_name"] for a in plan["alternatives"] if a["policy"] == "none"],
     }
+
+
+def plan_for_prompt(plan, intent):
+    return {"situation": {"disaster": intent.get("disaster"), "household": intent.get("household"),
+                          "urgent_safety": intent.get("urgent_safety")}, **plan_facts(plan)}
 
 
 def _brief_validator(n_stops):
@@ -758,18 +805,23 @@ def fallback_brief(plan, intent):
     stops = plan["route"]["stops"]
     checks = [u["quantity_note"] for u in plan["unresolved"] if u.get("reason") == "quantity_unverified"]
     missing = [u for u in plan["unresolved"] if u.get("reason") != "quantity_unverified"]
+    walking = plan.get("mode") == "walking"
     if stops:
         first = stops[0]
-        headline = f"Start at {first['store']['name']}, about {first['leg_min']} minutes away."
+        headline = f"Start at {first['store']['name']}, about {first['leg_min']} minutes {'on foot' if walking else 'away'}."
         short = [f"{s['name'].lower()} ({s['found']} of {s['qty']})" for s in plan.get("shortfalls", [])]
         problems = ((f"{len(missing)} item(s) could not be found nearby. " if missing else "")
                     + ("Not enough in stock for the full amount: " + ", ".join(short) + ". " if short else "")
                     + " ".join(checks))
-        summary = (f"{len(stops)} stop{'s' if len(stops) != 1 else ''}, about {plan['route']['total_min']} minutes in all. "
+        summary = (f"{len(stops)} stop{'s' if len(stops) != 1 else ''}, about {plan['route']['total_min']} minutes in all"
+                   + (" on foot" if walking else "") + ". "
                    + (problems.strip() or "Everything on your list is covered."))
     elif checks:
         headline = "Confirm substitute quantities before shopping."
         summary = " ".join(checks) + (f" {len(missing)} other item(s) could not be found nearby." if missing else "")
+    elif walking:
+        headline = "No open store within walking distance has these items right now."
+        summary = "Check the driving plan, or see the alternatives below."
     else:
         headline = "No open store near you has these items right now."
         summary = "Try a wider search area, or see the alternatives below."
@@ -785,6 +837,9 @@ def fallback_brief(plan, intent):
     safety = []
     if intent.get("urgent_safety", {}).get("flag"):
         safety.append("If anyone is in danger, call 911 and get to safety before you go shopping.")
+    if walking and stops and plan["route"]["total_min"] >= 30:
+        safety.append("This is a long walk. Take water and a charged phone, wear sturdy shoes, "
+                      "and tell someone where you are going.")
     safety += GENERIC_SAFETY.get(intent.get("disaster", {}).get("type"), [])
     if not safety:
         safety = ["Stock levels are estimates. Call ahead if you can."]
@@ -797,25 +852,65 @@ def brief(plan, intent):
     t0 = time.monotonic()
     n = len(plan["route"]["stops"])
     user = "PLAN\n" + json.dumps(plan_for_prompt(plan, intent), ensure_ascii=False)
+    lane = plan.get("mode", "driving")
     try:
         b, trace = call_model("brief", BRIEF_SYSTEM, user,
-                              lambda raw: _brief_validator(n)(extract_json(raw)), max_tokens=1400, temperature=0.3)
+                              lambda raw: _brief_validator(n)(extract_json(raw)), lane=lane)
     except AIUnavailable as exc:
         b = fallback_brief(plan, intent)
-        trace = _fallback_trace("brief", exc, t0)
+        trace = _fallback_trace("brief", exc, t0, lane)
     if intent.get("urgent_safety", {}).get("flag") and not (b["safety_notes"] and "911" in b["safety_notes"][0]):
         b["safety_notes"].insert(0, "If anyone is in danger, call 911 and get to safety before you go shopping.")
         b["safety_notes"] = b["safety_notes"][:5]
     return b, trace
 
 
-# -------------------------------------------------------------- 4. follow-up
-FOLLOWUP_SYSTEM = """You answer follow-up questions about a SupplyLine emergency supply plan.
-Use only the PLAN text and well-established safety guidance. If you do not know, say so and suggest calling the store or dialing 211.
-Keep the answer under 120 words, in plain words, with no markdown. If the question suggests someone is in danger, begin with: Call 911."""
+# ------------------------------------------------------------ 4. assistant
+FOLLOWUP_SYSTEM = """You are the assistant inside SupplyLine, an emergency supply finder. The person asks you questions while they decide what to do, so answer for THEIR situation right now.
+
+SITUATION is everything the app knows: the local time, how they are travelling (selected_mode), the disaster and household, what they need, and two complete plans, one for driving and one for walking, each with its stores, travel minutes, arrival times, opening hours, stock notes and anything that could not be found. Use ONLY SITUATION, PLAN TEXT and well-established safety guidance. Never invent stores, hours, stock, road conditions, prices or phone numbers.
+
+- Answer the question that was asked. Use the plan for selected_mode unless they ask about the other one.
+- Questions about walking or driving: compare the two plans with their real numbers (minutes, stops, and what each cannot find).
+- If a store may be closed when they arrive, or its stock information may be stale, say so plainly.
+- If you do not know, say so and suggest calling the store or dialing 211.
+- Under 120 words, plain words, no markdown. If the question suggests someone is in danger, begin with: Call 911."""
+
+_OUTAGE = ("The AI model is not reachable right now, so I can't answer that. "
+           "Your plan above still works. Call the store to confirm stock, or dial 211 for local help.")
 
 
-def followup(question, plan_text):
+def fallback_answer(question, situation):
+    """No model available. With a situation, still say what the plans themselves say."""
+    if not situation or not situation.get("plans"):
+        return _OUTAGE
+    out = []
+    danger = merge_safety(question, None)
+    if danger["flag"]:
+        out.append("Call 911 now if anyone is in danger. " + danger["reason"])
+    out.append("The AI model is not reachable, so this comes straight from your plans.")
+    selected = situation.get("selected_mode")
+    for mode in ("driving", "walking"):
+        p = situation["plans"].get(mode)
+        if not p:
+            continue
+        label = ("Driving" if mode == "driving" else "Walking") + (" (shown)" if mode == selected else "")
+        stops = p.get("stops") or []
+        if not stops:
+            out.append(f"{label}: no open store within reach has your items right now.")
+            continue
+        out.append(f"{label}: {len(stops)} stop{'s' if len(stops) != 1 else ''}, about {p['total_minutes_with_shopping']} "
+                   f"minutes in all, starting at {stops[0]['store']} ({stops[0]['minutes_to_get_there']} min).")
+        if re.search(r"open|clos|hour|late|still|time|when", (question or "").lower()):
+            out.append(("Driving" if mode == "driving" else "Walking") + " arrivals: " + "; ".join(
+                f"{s['store']} about {s['arrive']}" + (f" ({s['hours']})" if s.get("hours") else "") for s in stops) + ".")
+    out.append("Call ahead to confirm stock, or dial 211 for local help.")
+    return " ".join(out)[:900]
+
+
+def assistant(question, situation=None, plan_text=""):
+    """Answer a question about the person's own situation. `situation` is built by the server
+    from the engine's plans (both ways of travelling), never taken from the browser's text."""
     t0 = time.monotonic()
 
     def parse(raw):
@@ -824,12 +919,23 @@ def followup(question, plan_text):
             raise ValueError("empty answer")
         return ans[:900]
 
+    user = ""
+    if situation:
+        user += "SITUATION\n" + json.dumps(situation, ensure_ascii=False, separators=(",", ":")) + "\n\n"
+    if plan_text:
+        user += "PLAN TEXT\n" + plan_text[:3000 if situation else 6000] + "\n\n"
+    user += "QUESTION\n" + question
     try:
-        ans, trace = call_model("followup", FOLLOWUP_SYSTEM,
-                                "PLAN\n" + plan_text[:6000] + "\n\nQUESTION\n" + question,
-                                parse, max_tokens=500, temperature=0.3)
+        ans, trace = call_model("followup", FOLLOWUP_SYSTEM, user, parse)
     except AIUnavailable as exc:
-        ans = ("The AI model is not reachable right now, so I can't answer that. "
-               "Your plan above still works. Call the store to confirm stock, or dial 211 for local help.")
+        ans = fallback_answer(question, situation)
         trace = _fallback_trace("followup", exc, t0)
+    danger = merge_safety(question, None)
+    if danger["flag"] and "911" not in ans[:60] and "988" not in ans[:60]:   # enforced in code, not left to the prompt
+        ans = ("Call 911 now if anyone is in danger. " + danger["reason"] + " " + ans)[:900]
     return ans, trace
+
+
+def followup(question, plan_text):
+    """The original entry point: a question about a plan that is only known as text."""
+    return assistant(question, None, plan_text)

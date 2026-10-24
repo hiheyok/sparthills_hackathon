@@ -7,8 +7,10 @@ AI, road routing and map tiles make no external requests.
 """
 import datetime
 import os
+import re
 import sys
 import threading
+import time
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -73,7 +75,9 @@ class BrowserRegressions(unittest.TestCase):
         self.page = self.context.new_page()
         self.page.set_default_timeout(5000)
         self.page.clock.set_fixed_time(datetime.datetime(2026, 10, 23, 17, tzinfo=datetime.timezone.utc))
-        self.errors, self.searches, self.paths = [], [], []
+        self.errors, self.searches, self.paths, self.calls = [], [], [], []
+        self.page.on('request', lambda req: self.calls.append((req.url.split('/api/')[1].split('?')[0], req.post_data_json))
+                     if '/api/' in req.url and req.method == 'POST' else None)
         self.page.on('pageerror', lambda err: self.errors.append(str(err)))
         self.page.on('request', lambda req: self.searches.append(req.post_data_json)
                      if req.url.endswith('/api/search') else None)
@@ -270,6 +274,164 @@ class BrowserRegressions(unittest.TestCase):
         self.page.set_viewport_size({'width': 390, 'height': 844})
         self.assert_road()
         self.assert_stops_visible()
+
+    # ---- driving and walking: two plans, built together, one switch ----
+    def api_calls(self, name):
+        return [body for path, body in self.calls if path == name]
+
+    def switch(self, mode):
+        self.page.locator(f'#r-mode [data-mode="{mode}"]').click()
+
+    def lane_ready(self, mode):
+        expect(self.page.locator(f'#r-mode [data-mode="{mode}"] .mode-sub')).not_to_contain_text('working')
+
+    def test_both_plans_are_built_together_and_switching_asks_nobody(self):
+        self.load()
+        self.submit()
+        self.assert_road()
+        self.lane_ready('walking')
+        expect(self.page.locator('#r-mode [data-mode="driving"]')).to_have_attribute('aria-pressed', 'true')
+        asked = len(self.calls)
+        self.switch('walking')
+        expect(self.page.locator('#r-mode [data-mode="walking"]')).to_have_attribute('aria-pressed', 'true')
+        expect(self.page.locator('.facts-row')).to_contain_text('walking')
+        expect(self.page.locator('.where-line').first).to_contain_text('walk')
+        expect(self.page.locator('#planTitle')).to_contain_text('on foot')
+        expect(self.page.locator('#mapNote')).to_contain_text('Walking route:')
+        # the walking server's usage policy asks for the OpenStreetMap credit and a fix-the-map link wherever its routes show
+        expect(self.page.locator('#mapNote a')).to_have_attribute('href', 'https://www.openstreetmap.org/fixthemap')
+        expect(self.page.locator('.leaflet-control-attribution a[href="https://www.openstreetmap.org/copyright"]')).to_be_attached()
+        line = self.page.locator('#map path[stroke-width="5"]')
+        expect(line).to_have_count(1)
+        expect(line).to_have_attribute('stroke', '#0b6e4c')
+        expect(self.page.locator('.stop-actions a').first).to_have_attribute('href', re.compile('travelmode=walking'))
+        expect(self.page.locator('#mapLink')).to_have_attribute('href', re.compile('travelmode=walking'))
+        stages = [p for p, _ in self.calls[asked:] if p in ('understand', 'search', 'alternatives', 'brief')]
+        self.assertEqual(stages, [])                                # the other plan was already built
+        self.switch('driving')
+        expect(self.page.locator('#mapNote')).to_contain_text('Fastest road route:')
+        expect(self.page.locator('#map path[stroke-width="5"]')).to_have_attribute('stroke', '#0a4da2')
+        expect(self.page.locator('.stop-actions a').first).to_have_attribute('href', re.compile('travelmode=driving'))
+        self.assertEqual(self.errors, [])
+
+    def test_each_way_of_travelling_gets_its_own_agents_and_the_screen_lane_gets_its_path_first(self):
+        self.load()
+        self.submit()
+        self.lane_ready('walking')
+        deadline = time.time() + 5
+        while len(self.api_calls('route')) < 2 and time.time() < deadline:
+            self.page.wait_for_timeout(50)
+        self.assertEqual([b['mode'] for b in self.api_calls('route')], ['driving', 'walking'])
+        self.assertEqual(sorted(b['mode'] for b in self.api_calls('brief')), ['driving', 'walking'])
+        # bottled water is out downtown for both, so each lane asks its own substitutes agent
+        self.assertEqual(sorted(b['mode'] for b in self.api_calls('alternatives')), ['driving', 'walking'])
+        self.assertEqual(len(self.searches), 1)                   # still one search per request
+
+    def test_the_traces_name_the_agent_and_the_lane(self):
+        self.load()
+        self.submit()
+        self.lane_ready('walking')
+        self.page.locator('#r-trace summary').click()
+        trace = self.page.locator('#r-trace')
+        expect(trace).to_contain_text('Write your briefing, driving')
+        expect(trace).to_contain_text('Write your briefing, walking')
+
+    def test_a_failing_walking_plan_leaves_driving_alone_and_can_be_retried(self):
+        failing = {'on': True}
+
+        def brief(route):
+            if failing['on'] and route.request.post_data_json.get('mode') == 'walking':
+                route.fulfill(status=503, json={'error': 'The walking plan is temporarily unavailable.'})
+            else:
+                route.continue_()
+        self.page.route('**/api/brief', brief)
+        self.load()
+        self.submit()
+        self.assert_road()
+        expect(self.page.locator('#r-mode [data-mode="walking"] .mode-sub')).to_have_text('unavailable')
+        expect(self.page.locator('#go')).to_be_enabled()
+        self.switch('walking')
+        expect(self.page.locator('#r-plan')).to_contain_text('temporarily unavailable')
+        expect(self.page.locator('#map path[stroke-width="5"]')).to_have_count(0)      # not driving's route on a walking screen
+        failing['on'] = False
+        self.page.locator('[data-action="retry-lane"]').click()
+        expect(self.page.locator('#r-plan .facts-row')).to_contain_text('walking')
+        expect(self.page.locator('#r-mode [data-mode="walking"] .mode-sub')).not_to_have_text('unavailable')
+        self.assertEqual(self.errors, [])
+
+    def test_the_assistant_answers_from_the_situation_while_plans_are_still_building(self):
+        held = []
+        self.page.route('**/api/brief', lambda r: held.append(r))
+        self.load()
+        self.page.locator('#text').fill(TEXT)
+        self.page.locator('#text').press('Enter')
+        expect(self.page.locator('#fuForm')).to_be_visible()          # asking works as soon as the request is understood
+        expect(self.page.locator('#planTitle')).to_have_count(0)      # while no plan is on screen yet
+        self.page.locator('#fuQ').fill('Should I walk or drive?')
+        self.page.locator('#fuQ').press('Enter')
+        expect(self.page.locator('#fuAnswer')).to_contain_text('Driving')
+        expect(self.page.locator('#fuAnswer')).to_contain_text('Walking')
+        self.page.unroute('**/api/brief')
+        for r in held:
+            r.continue_()
+        expect(self.page.locator('#planTitle')).to_be_visible()
+        question = self.api_calls('followup')[0]
+        self.assertEqual((question['mode'], question['radius_km']), ('driving', 8))
+        self.assertTrue(question['intent']['needs'])
+        self.assertIn('lat', question)
+        self.assertEqual(self.errors, [])
+
+    def test_a_saved_plan_keeps_both_plans(self):
+        self.load()
+        self.submit()
+        self.lane_ready('walking')
+        self.page.wait_for_function("""() => { const s = JSON.parse(localStorage.getItem('supplyline.last.v1') || 'null');
+                                              return !!(s && s.lanes && s.lanes.driving && s.lanes.walking); }""")
+        self.page.reload()
+        self.page.locator('[data-action="open-saved"]').click()
+        expect(self.page.locator('#planTitle')).to_be_visible()
+        expect(self.page.locator('#r-mode [data-mode="walking"] .mode-sub')).not_to_have_text('unavailable')
+        self.switch('walking')
+        expect(self.page.locator('.facts-row')).to_contain_text('walking')
+        expect(self.page.locator('#map path[stroke-width="5"]')).to_have_count(1)
+        self.assertEqual(self.errors, [])
+
+    def test_a_plan_saved_before_there_were_two_plans_still_opens_and_can_build_the_walk(self):
+        self.load()
+        intent = self.page.request.post(self.url + '/api/understand', data={'text': TEXT}).json()['intent']
+        body = {'lat': 37.3382, 'lng': -121.8863, 'radius_km': 8, 'local_minutes': 600, 'intent': intent}
+        brief = self.page.request.post(self.url + '/api/brief', data=body).json()
+        brief.pop('mode', None)
+        brief['plan'].pop('mode', None)
+        for key in ('mode', 'total_travel_min'):
+            brief['plan']['route'].pop(key, None)
+        old = {'savedAt': 1, 'result': brief, 'intent': intent, 'traces': [], 'text': TEXT, 'radius': 8, 'origin': 'Downtown'}
+        self.page.evaluate('(saved) => localStorage.setItem("supplyline.last.v1", JSON.stringify(saved))', old)
+        self.page.reload()
+        self.page.locator('[data-action="open-saved"]').click()
+        expect(self.page.locator('#planTitle')).to_be_visible()
+        expect(self.page.locator('#r-mode [data-mode="driving"]')).to_have_attribute('aria-pressed', 'true')
+        expect(self.page.locator('.facts-row')).to_contain_text('driving')
+        expect(self.page.locator('#r-mode [data-mode="walking"] .mode-sub')).to_have_text('unavailable')
+        self.switch('walking')
+        expect(self.page.locator('#r-plan')).to_contain_text('not saved')
+        self.page.locator('[data-action="retry-lane"]').click()
+        expect(self.page.locator('#r-plan .facts-row')).to_contain_text('walking')
+        self.assertEqual(self.errors, [])
+
+    def test_the_way_of_travelling_is_remembered_and_leads_the_next_search(self):
+        self.load()
+        self.submit()
+        self.lane_ready('walking')
+        self.switch('walking')
+        self.page.reload()
+        self.submit()
+        expect(self.page.locator('#r-mode [data-mode="walking"]')).to_have_attribute('aria-pressed', 'true')
+        expect(self.page.locator('.facts-row')).to_contain_text('walking')
+        self.assertEqual(self.searches[-1]['mode'], 'walking')
+        self.lane_ready('driving')
+        self.switch('driving')
+        expect(self.page.locator('.facts-row')).to_contain_text('driving')
 
     def service_worker_page(self):
         self.context.close()

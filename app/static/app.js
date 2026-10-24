@@ -9,6 +9,7 @@
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const KM_TO_MI = 0.621371;
   const fmtMi = (km) => { const v = km * KM_TO_MI; return (v < 10 ? v.toFixed(1) : Math.round(v)) + ' mi'; };
+  const fmtMin = (min) => { const m = Math.max(1, Math.round(min)); return m < 90 ? `${m} min` : `${Math.floor(m / 60)} h${m % 60 ? ` ${m % 60} min` : ''}`; };
   const SAVE_KEY = 'supplyline.last.v1';
 
   const safeStore = {
@@ -25,7 +26,15 @@
       text: "A storm took out our power three days ago. We need D batteries for our lantern and propane for the camp stove." },
   ];
 
-  const state = { meta: null, customLocations: {}, radius: 8, traces: [], last: null, running: false };
+  // Two lanes, one per way of getting there. Each has its own plan, briefing agent and path, and
+  // they are built at the same time. state.mode is the lane on screen.
+  const MODE_KEY = 'supplyline.mode';
+  const MODES = { driving: { label: 'Drive', verb: 'drive', ing: 'driving' }, walking: { label: 'Walk', verb: 'walk', ing: 'walking' } };
+  const state = { meta: null, customLocations: {}, radius: 8, traces: [], last: null, running: false,
+    mode: safeStore.get(MODE_KEY) === 'walking' ? 'walking' : 'driving', lanes: {}, runId: 0, intent: null, origin: null,
+    startedAt: 0, wallMs: 0 };
+  const newLane = () => ({ status: 'working', result: null, alternatives: [], traces: [], error: '',
+    road: null, roadState: 'idle', roadPromise: null, roadFailure: '' });
 
   // ------------------------------------------------------------- utilities
   function pacificMinutes() {
@@ -130,7 +139,7 @@
   });
 
   // ------------------------------------------------------------------- map
-  const mapState = { map: null, layer: null, straight: null, token: 0, plan: null, line: null, loading: false, bounds: null, maxZoom: 14 };
+  const mapState = { map: null, layer: null, straight: null, token: 0, plan: null, line: null, loading: false, bounds: null, maxZoom: 14, mode: 'driving' };
 
   function ensureMap() {
     const el = $('#map');
@@ -141,7 +150,8 @@
     mapState.map = L.map(el, { zoomControl: true, attributionControl: true }).setView([37.3382, -121.8863], 12);
     // OpenStreetMap's tile policy needs a Referer, so send the site origin (and nothing more).
     const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors', referrerPolicy: 'strict-origin-when-cross-origin',
+      maxZoom: 19, referrerPolicy: 'strict-origin-when-cross-origin',
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
     }).addTo(mapState.map);
     let loaded = 0, failed = 0;
     const warn = $('#mapWarn');
@@ -199,7 +209,7 @@
   function googleRouteUrl(plan) {
     const loc = plan.location, pts = plan.route.stops.map((s) => `${s.store.lat},${s.store.lng}`);
     const via = pts.slice(0, -1);
-    return `https://www.google.com/maps/dir/?api=1&travelmode=driving&origin=${loc.lat},${loc.lng}&destination=${pts[pts.length - 1]}`
+    return `https://www.google.com/maps/dir/?api=1&travelmode=${plan.mode === 'walking' ? 'walking' : 'driving'}&origin=${loc.lat},${loc.lng}&destination=${pts[pts.length - 1]}`
       + (via.length ? `&waypoints=${encodeURIComponent(via.join('|'))}` : '');
   }
 
@@ -212,48 +222,92 @@
       && Number.isFinite(road.distance_km) && road.distance_km >= 0;
   }
 
-  async function loadRoad(plan, line, cached) {
-    const token = mapState.token;
-    mapState.loading = true;
-    $('#mapNote').textContent = 'Finding the fastest road route...';
-    let road = validRoad(cached) ? cached : null;
-    let failure = 'Road directions are unavailable right now.';
-    if (!road) {
+  // Driving and walking each have a path. Each lane asks for its own once and shares the answer. The lane
+  // on screen is asked first; the other waits until that one has settled, so the person looking at the map
+  // is never queued behind the one they are not (and the free routing servers see one request at a time).
+  const modeOf = (plan) => (plan && plan.mode === 'walking' ? 'walking' : 'driving');
+  const lanePoints = (plan) => [[plan.location.lat, plan.location.lng]].concat(plan.route.stops.map((s) => [s.store.lat, s.store.lng]));
+  const ROAD_STYLE = {
+    driving: { color: '#0a4da2', dash: null, name: 'driving', note: 'Fastest road route', source: 'OpenStreetMap roads, no live traffic' },
+    walking: { color: '#0b6e4c', dash: '1 9', name: 'walking', note: 'Walking route', source: 'OpenStreetMap footpaths and roads, no live conditions' },
+  };
+
+  function requestRoad(lane, plan, runId) {
+    if (lane.roadPromise) return lane.roadPromise;
+    const mode = modeOf(plan);
+    lane.roadState = 'loading';
+    lane.roadPromise = (async () => {
+      let road = null, failure = 'Road directions are unavailable right now.';
       try {
-        const r = await post('/api/route', { points: line.map(([lat, lng]) => ({ lat, lng })) });
+        const r = await post('/api/route', { points: lanePoints(plan).map(([lat, lng]) => ({ lat, lng })), mode });
         road = r.available && validRoad(r) ? r : null;
         if (!road) failure = r.reason || 'The routing service returned an invalid road path.';
       } catch (e) { failure = e.message || failure; }
+      if (runId === state.runId) {                                  // a newer search owns the screen now
+        lane.road = road;
+        lane.roadFailure = road ? '' : failure;
+        lane.roadState = road ? 'done' : 'failed';
+        if (road) persist();
+      }
+      return { road, failure };
+    })();
+    return lane.roadPromise;
+  }
+
+  function prefetchRoads(runId) {
+    if (runId !== state.runId) return;
+    const shown = state.lanes[state.mode];
+    if (shown && shown.status === 'working') return;               // the lane on screen is still being built: it asks first
+    if (shown && shown.status === 'ready' && shown.result.plan.route.stops.length && shown.roadState !== 'done' && shown.roadState !== 'failed') return;
+    for (const m of Object.keys(MODES)) {
+      const lane = state.lanes[m];
+      if (lane && lane.status === 'ready' && lane.roadState === 'idle' && lane.result.plan.route.stops.length) {
+        requestRoad(lane, lane.result.plan, runId).then(() => prefetchRoads(runId));
+        return;                                                     // one at a time
+      }
     }
+  }
+
+  async function loadRoad(plan, line, lane) {
+    const token = mapState.token;
+    const style = ROAD_STYLE[modeOf(plan)];
+    mapState.loading = true;
+    $('#mapNote').textContent = `Finding the ${modeOf(plan) === 'walking' ? 'best walking' : 'fastest road'} route...`;
+    let road = validRoad(lane.road) ? lane.road : null;
+    let failure = lane.roadFailure || 'Road directions are unavailable right now.';
+    if (!road) ({ road, failure } = await requestRoad(lane, plan, state.runId));
     if (token !== mapState.token || !mapState.map) return;     // a newer search replaced this plan
     mapState.loading = false;
     const note = $('#mapNote');
     if (!road) {
-      note.innerHTML = `${esc(failure)} The dashed line only connects stops; it is not a driving route. Use Directions or <button type="button" class="btn-small" data-action="retry-road">Retry road route</button>.`;
+      note.innerHTML = `${esc(failure)} The dashed line only connects stops; it is not a ${style.name} route. Use Directions or <button type="button" class="btn-small" data-action="retry-road">Retry ${modeOf(plan) === 'walking' ? 'walking' : 'road'} route</button>.`;
+      prefetchRoads(state.runId);
       return;
     }
     L.polyline(road.path, { color: '#ffffff', weight: 10, opacity: 0.9, lineJoin: 'round', smoothFactor: 0 }).addTo(mapState.layer);
-    const drawn = L.polyline(road.path, { color: '#0a4da2', weight: 5, opacity: 0.95, lineJoin: 'round', smoothFactor: 0 }).addTo(mapState.layer);
+    const drawn = L.polyline(road.path, { color: style.color, weight: 5, opacity: 0.95, lineJoin: 'round', lineCap: 'round',
+      smoothFactor: 0, ...(style.dash ? { dashArray: style.dash } : {}) }).addTo(mapState.layer);
     if (mapState.straight) mapState.layer.removeLayer(mapState.straight);
     mapState.bounds = drawn.getBounds().extend(L.latLngBounds(line));
     mapState.maxZoom = 15;
     fitMap();
-    note.textContent = `Fastest road route: about ${Math.max(1, Math.round(road.duration_min))} min, ${fmtMi(road.distance_km)} (OpenStreetMap roads, no live traffic). Small circles are other stores with stock.`;
-    if (!cached && state.last && state.last.result && state.last.result.plan === plan) {
-      state.last.road = road;                                  // keep it so a saved plan shows the road route offline
-      safeStore.set(SAVE_KEY, state.last);
-    }
+    // The routing services ask to see the OpenStreetMap credit and a link for fixing the map wherever their routes are shown.
+    note.innerHTML = `${esc(style.note)}: about ${esc(fmtMin(road.duration_min))}, ${esc(fmtMi(road.distance_km))} (${esc(style.source)}). Small circles are other stores with stock. `
+      + '<a href="https://www.openstreetmap.org/fixthemap" target="_blank" rel="noopener">Fix the map</a>.';
+    prefetchRoads(state.runId);
   }
 
-  function drawRoute(plan, cachedRoad) {
+  function drawRoute(plan, lane) {
     const map = ensureMap();
     const loc = plan.location;
+    const color = ROAD_STYLE[modeOf(plan)].color;
     if (!map) return;
     mapState.token++;
     mapState.plan = plan;
+    mapState.mode = modeOf(plan);
     mapState.layer.clearLayers();
     const bounds = [[loc.lat, loc.lng]];
-    L.circle([loc.lat, loc.lng], { radius: loc.radius_km * 1000, color: '#0a4da2', weight: 2, dashArray: '6 6', fillOpacity: 0.04 }).addTo(mapState.layer);
+    L.circle([loc.lat, loc.lng], { radius: loc.radius_km * 1000, color, weight: 2, dashArray: '6 6', fillOpacity: 0.04 }).addTo(mapState.layer);
     const inRoute = new Set(plan.route.stops.map((s) => s.store.id));
     const seen = new Set();
     plan.results.forEach((r) => r.stores.forEach((s) => {
@@ -270,7 +324,7 @@
         .bindTooltip(`${s.order}. ${esc(s.store.name)}`, { direction: 'top', offset: [0, -14] }).addTo(mapState.layer);
     });
     mapState.straight = line.length > 1
-      ? L.polyline(line, { color: '#0a4da2', weight: 4, opacity: 0.8, dashArray: '8 8' }).addTo(mapState.layer) : null;
+      ? L.polyline(line, { color, weight: 4, opacity: 0.8, dashArray: '8 8' }).addTo(mapState.layer) : null;
     L.marker([loc.lat, loc.lng], { icon: pin('pin-you', '', 20), keyboard: false }).addTo(mapState.layer);
     mapState.bounds = bounds.length > 1 ? L.latLngBounds(bounds) : null;
     mapState.maxZoom = 14;
@@ -280,8 +334,8 @@
     if (plan.route.stops.length) {
       link.href = googleRouteUrl(plan);
       link.hidden = false;
-      $('#mapNote').textContent = 'Finding the fastest road route...';
-      loadRoad(plan, line, cachedRoad);
+      $('#mapNote').textContent = `Finding the ${modeOf(plan) === 'walking' ? 'best walking' : 'fastest road'} route...`;
+      loadRoad(plan, line, lane);
     } else {
       link.hidden = true;
       $('#mapNote').textContent = 'No route yet.';
@@ -318,7 +372,7 @@
   function renderSafety(intent) {
     const us = intent.urgent_safety || {};
     $('#r-safety').innerHTML = us.flag
-      ? `<div class="safety" role="alert"><h2>Call 911 first if anyone is in danger</h2><p>${esc(us.reason || 'This may be an emergency.')}</p><p>Get everyone to safety before you drive for supplies. Your plan is below when you are ready.</p></div>`
+      ? `<div class="safety" role="alert"><h2>Call 911 first if anyone is in danger</h2><p>${esc(us.reason || 'This may be an emergency.')}</p><p>Get everyone to safety before you go out for supplies. Your plan is below when you are ready.</p></div>`
       : '';
   }
 
@@ -340,39 +394,39 @@
     </details>`;
   }
 
-  function storeLine(s) {
+  function storeLine(s, mode) {
     const f = freshness(s);
     return `<div class="store"><strong>${esc(s.name)}</strong>
-      <div class="facts"><span>${s.eta_min} min drive</span><span>${fmtMi(s.dist_km)}</span>${s.open_note ? `<span>${esc(s.open_note)}</span>` : ''}
+      <div class="facts"><span>${fmtMin(s.eta_min)} ${MODES[mode || 'driving'].verb}</span><span>${fmtMi(s.dist_km)}</span>${s.open_note ? `<span>${esc(s.open_note)}</span>` : ''}
       <span class="${f.cls}">${esc(f.text)}</span>${s.low ? '<span class="warn">Low stock</span>' : ''}${s.store_note ? `<span class="warn">${esc(s.store_note)}</span>` : ''}</div></div>`;
   }
 
-  function gapText(r) {
+  function gapText(r, mode, radiusKm) {
     const st = r.stats || {};
-    let t = `Nothing in stock at the ${st.checked || 0} stores within ${fmtMi(state.radius)}`;
+    let t = `Nothing in stock at the ${st.checked || 0} stores within ${fmtMi(radiusKm || state.radius)}`;
     const parts = [];
     if (st.out) parts.push(`${st.out} sold out`);
     if (st.closed) parts.push(`${st.closed} closed`);
     if (st.no_item) parts.push(`${st.no_item} do not carry it`);
     if (parts.length) t += ` (${parts.join(', ')})`;
     t += '.';
-    if (r.nearest_any) t += ` Nearest with stock: ${r.nearest_any.name}, ${fmtMi(r.nearest_any.dist_km)} away, about ${r.nearest_any.eta_min} min.`;
+    if (r.nearest_any) t += ` Nearest with stock: ${r.nearest_any.name}, ${fmtMi(r.nearest_any.dist_km)} away, about ${fmtMin(r.nearest_any.eta_min)}${mode === 'walking' ? ' on foot' : ''}.`;
     return t;
   }
 
-  function renderByItem(results, open) {
+  function renderByItem(results, open, mode, radiusKm) {
     $('#r-items').innerHTML = `<details ${open ? 'open' : ''}><summary>Every item, store by store</summary>` + results.map((r) => {
       const chip = r.status === 'found' ? ['In stock nearby', 'ok'] : r.status === 'partial' ? ['Limited stock', 'warn'] : ['Not available nearby', 'bad'];
       return `<div class="item-block"><div class="item-head"><h4>${esc(r.label)}${r.qty > 1 ? ` x${r.qty}` : ''}</h4>
         <span class="chip ${chip[1]}">${chip[0]}</span>${r.inferred ? '<span class="tag ai" title="You did not say this, but the plan needs it">Inferred</span>' : ''}</div>
-        ${r.status === 'gap' ? `<p class="gap-text">${esc(gapText(r))}</p>` : r.stores.slice(0, 3).map(storeLine).join('')}</div>`;
+        ${r.status === 'gap' ? `<p class="gap-text">${esc(gapText(r, mode, radiusKm))}</p>` : r.stores.slice(0, 3).map((s) => storeLine(s, mode)).join('')}</div>`;
     }).join('') + '</details>';
   }
 
-  function directions(s) {
-    const q = `${s.lat},${s.lng}`;
-    return `<a class="btn-small" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=driving">Directions</a>
-            <a class="btn-small" target="_blank" rel="noopener" href="https://maps.apple.com/?daddr=${q}">Apple Maps</a>`;
+  function directions(s, mode) {
+    const q = `${s.lat},${s.lng}`, walking = mode === 'walking';
+    return `<a class="btn-small" target="_blank" rel="noopener" href="https://www.google.com/maps/dir/?api=1&destination=${q}&travelmode=${walking ? 'walking' : 'driving'}">Directions</a>
+            <a class="btn-small" target="_blank" rel="noopener" href="https://maps.apple.com/?daddr=${q}&dirflg=${walking ? 'w' : 'd'}">Apple Maps</a>`;
   }
 
   function ticket(i) {
@@ -405,15 +459,15 @@
     } else {
       html = `<h2 class="plan-title" id="planTitle">${esc(brief.headline)}</h2>
         ${brief.summary ? `<p class="lede">${esc(brief.summary)}</p>` : ''}
-        <div class="facts-row"><span>${stops.length} stop${stops.length > 1 ? 's' : ''}</span><span>${plan.route.total_drive_min} min driving</span><span>${sum.covered ?? sum.in_route} of ${sum.needs} items covered</span>${sum.swapped ? `<span>${sum.swapped} substitute${sum.swapped > 1 ? 's' : ''}</span>` : ''}</div>
+        <div class="facts-row"><span>${stops.length} stop${stops.length > 1 ? 's' : ''}</span><span>${fmtMin(plan.route.total_travel_min ?? plan.route.total_drive_min)} ${ROAD_STYLE[modeOf(plan)].name}</span><span>${sum.covered ?? sum.in_route} of ${sum.needs} items covered</span>${sum.swapped ? `<span>${sum.swapped} substitute${sum.swapped > 1 ? 's' : ''}</span>` : ''}</div>
         <div id="mapSlot" class="map-slot"></div>
         <ol class="route"><li class="origin"><span class="node" aria-hidden="true"></span><div class="origin-text"><b>You are here</b><small>${esc(state.originLabel || '')}${state.originLabel ? ', ' : ''}leave about ${esc(plan.route.leaves)}</small></div></li>
         ${stops.map((s) => `<li class="stop"><span class="node" aria-hidden="true">${s.order}</span><div>
           <h3>${esc(s.store.name)}</h3>
-          <div class="where-line"><span><b>${s.leg_min} min</b> drive, ${fmtMi(s.leg_km)}</span><span>Arrive about ${esc(s.arrive)}</span>${s.open_note ? `<span>${esc(s.open_note)}</span>` : ''}${s.store.store_note ? `<span class="warn">${esc(s.store.store_note)}</span>` : ''}</div>
+          <div class="where-line"><span><b>${fmtMin(s.leg_min)}</b> ${MODES[modeOf(plan)].verb}, ${fmtMi(s.leg_km)}</span><span>Arrive about ${esc(s.arrive)}</span>${s.open_note ? `<span>${esc(s.open_note)}</span>` : ''}${s.store.store_note ? `<span class="warn">${esc(s.store.store_note)}</span>` : ''}</div>
           ${says[s.order] ? `<p class="say">${esc(says[s.order])}</p>` : ''}
           <ul class="tickets">${s.items.map(ticket).join('')}</ul>
-          <div class="stop-actions">${directions(s.store)}${reportPanel(s)}</div></div></li>`).join('')}</ol>`;
+          <div class="stop-actions">${directions(s.store, modeOf(plan))}${reportPanel(s)}</div></div></li>`).join('')}</ol>`;
     }
     const unresolved = plan.unresolved.filter((u) => !plan.alternatives.some((a) => a.for_item === u.item_id));
     if (unresolved.length) html += `<p class="lede">Not found nearby: ${unresolved.map((u) => esc(u.name)).join(', ')}.</p>`;
@@ -432,7 +486,7 @@
 
   const FIT_TEXT = { strong: 'does the same job', partial: 'covers part of the need', workaround: 'temporary workaround' };
 
-  function renderAlternatives(alts) {
+  function renderAlternatives(alts, mode, radiusKm) {
     const el = $('#r-alts');
     if (!alts || !alts.length) { el.innerHTML = ''; return; }
     el.innerHTML = `<h2 class="section-title">Not in stock nearby</h2>
@@ -441,13 +495,13 @@
         const noSub = a.verdict === 'no_safe_substitute';
         const head = noSub ? `No safe substitute for ${a.for_name.toLowerCase()}` : a.options.length ? `Nobody near you has ${a.for_name.toLowerCase()}. Try instead:` : `Nobody near you has ${a.for_name.toLowerCase()}, and nothing else fits safely`;
         const st = a.stats || {};
-        const sub = `${st.checked || 0} stores checked within ${fmtMi(state.radius)}` + (a.nearest_any ? `. Nearest with stock: ${a.nearest_any.name}, ${fmtMi(a.nearest_any.dist_km)} away.` : '. None have it in stock.');
+        const sub = `${st.checked || 0} stores checked within ${fmtMi(radiusKm || state.radius)}` + (a.nearest_any ? `. Nearest with stock: ${a.nearest_any.name}, ${fmtMi(a.nearest_any.dist_km)} away${mode === 'walking' ? ` (${fmtMin(a.nearest_any.eta_min)} on foot)` : ''}.` : '. None have it in stock.');
         return `<article class="sign ${noSub ? 'no-sub' : ''}"><div class="sign-head"><h3>${esc(head)}</h3><p>${esc(sub)}</p></div><div class="sign-body">
           ${a.quantity_note ? `<p class="caution"><b>Quantity not confirmed:</b> ${esc(a.quantity_note)}</p>` : ''}
           ${a.options.map((o) => `<div class="opt ${esc(o.fit)}"><h4>${esc(o.name)}<span class="fit">${esc(FIT_TEXT[o.fit] || '')}</span></h4>
             ${o.why ? `<p>${esc(o.why)}</p>` : ''}${o.how_to_use ? `<p>${esc(o.how_to_use)}</p>` : ''}
             ${o.caution ? `<p class="caution"><b>Check:</b> ${esc(o.caution)}</p>` : ''}
-            ${o.stores && o.stores[0] ? `<p class="near">${esc(o.stores[0].name)}, ${o.stores[0].eta_min} min, ${fmtMi(o.stores[0].dist_km)}</p>` : ''}</div>`).join('')}
+            ${o.stores && o.stores[0] ? `<p class="near">${esc(o.stores[0].name)}, ${fmtMin(o.stores[0].eta_min)}, ${fmtMi(o.stores[0].dist_km)}</p>` : ''}</div>`).join('')}
           ${a.no_purchase_tips && a.no_purchase_tips.length ? `<div><h5>Without buying anything</h5><ul>${a.no_purchase_tips.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></div>` : ''}
           ${a.escalate ? `<div class="next-step"><b>Next step</b>${esc(a.escalate)}</div>` : ''}
         </div></article>`;
@@ -458,14 +512,22 @@
     $('#r-actions').innerHTML = `<button type="button" class="btn-quiet" data-action="copy">Copy plan as text</button>
       <a class="btn-quiet" data-action="sms" href="#" style="text-decoration:none;display:inline-flex;align-items:center">Text this plan</a>
       <button type="button" class="btn-quiet" data-action="print">Print</button>`;
-    $('#r-followup').innerHTML = `<h2 class="section-title">Ask about your plan</h2>
-      <form id="fuForm"><div class="field"><label for="fuQ" class="sr">Your question</label><input id="fuQ" maxlength="400" autocomplete="off" placeholder="Can the insulin go straight into the cooler with ice?"></div>
+  }
+
+  // The assistant has its own agent and reads the person's situation on the server, so it can answer as
+  // soon as the request is understood, without waiting for either plan. Never rebuilt once it exists,
+  // so a question and answer in progress are not wiped when a plan arrives.
+  function renderAsk() {
+    if ($('#fuForm')) return;
+    $('#r-followup').innerHTML = `<h2 class="section-title">Ask about your situation</h2>
+      <form id="fuForm"><div class="field"><label for="fuQ" class="sr">Your question</label><input id="fuQ" maxlength="400" autocomplete="off" placeholder="Should I walk or drive? Will the pharmacy still be open?"></div>
       <button class="btn-quiet" type="submit">Ask</button></form><div id="fuAnswer" aria-live="polite"></div>`;
   }
 
   function renderTrace() {
     const rows = state.traces.filter(Boolean).map((t) => {
-      const name = { understand: 'Read your request', alternatives: 'Find alternatives', brief: 'Write your briefing', followup: 'Answer a question' }[t.stage] || t.stage;
+      const task = { understand: 'Read your request', alternatives: 'Find alternatives', brief: 'Write your briefing', followup: 'Answer a question' }[t.stage] || t.stage;
+      const name = t.lane && MODES[t.lane] ? `${task}, ${MODES[t.lane].ing}` : task;
       const by = t.mode === 'bedrock' ? 'Amazon Bedrock (Converse API)' : 'Rules fallback';
       const note = t.mode === 'bedrock'
         ? (t.fell_back_from && t.fell_back_from.length ? `Used after ${t.fell_back_from.map(shortModel).join(', ')} was unavailable.` : '')
@@ -474,8 +536,14 @@
         <td class="num">${(t.ms / 1000).toFixed(1)}s</td><td class="num">${t.tokens_in} / ${t.tokens_out}</td></tr>`;
     }).join('');
     const keepOpen = $('#r-trace details') && $('#r-trace details').open;   // do not collapse it while someone is reading it
+    const work = state.traces.filter((t) => t && t.stage !== 'followup');
+    const sum = work.reduce((a, t) => a + (t.ms || 0), 0);
+    const wall = state.startedAt ? Math.round(state.finishedAt - state.startedAt) : 0;
+    const overlap = wall > 0 && sum > wall * 1.1
+      ? `<p class="trace-note"><b>Done in ${(wall / 1000).toFixed(1)}s.</b> The steps below add up to ${(sum / 1000).toFixed(1)}s because the driving and walking plans were built at the same time.</p>` : '';
     $('#r-trace').innerHTML = `<details${keepOpen ? ' open' : ''}><summary>Under the hood: what Bedrock did</summary>
-      <p class="trace-note">Stock, distance, opening hours and routing are plain code, so they are repeatable. Amazon Bedrock reads your request, judges which substitutes are safe, and writes the briefing. It can only choose catalog items, and substitutes only from items confirmed in stock near you. Prescriptions are never substituted.</p>
+      <p class="trace-note">Stock, distance, opening hours and routing are plain code, so they are repeatable. Amazon Bedrock does the language work, and each task has its own agent: one reads your request, one finds substitutes and one writes the briefing for each way of getting there, and one answers your questions. Driving and walking each get their own, running together. Agents can only choose catalog items, and substitutes only from items confirmed in stock near you. Prescriptions are never substituted.</p>
+      ${overlap}
       <div class="table-wrap"><table><thead><tr><th>Step</th><th>Handled by</th><th>Model</th><th>Time</th><th>Tokens in / out</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
   }
 
@@ -492,12 +560,126 @@
     mapState.plan = null;
     mapState.line = null;
     mapState.loading = false;
+    state.lanes = {};
     showOrigin();
     rescueMap();
-    ['r-safety', 'r-plan', 'r-alts', 'r-items', 'r-understood', 'r-actions', 'r-followup', 'r-trace'].forEach((id) => { $('#' + id).innerHTML = ''; });
+    ['r-safety', 'r-mode', 'r-plan', 'r-alts', 'r-items', 'r-understood', 'r-actions', 'r-followup', 'r-trace'].forEach((id) => { $('#' + id).innerHTML = ''; });
     $('#notice').hidden = true;
     $('#saved').hidden = true;
     $('#r-plan').classList.remove('reveal');
+  }
+
+  // ----------------------------------------------------------------- lanes
+  // Driving and walking are two lanes. Each is built by its own agents (substitutes, then briefing) and has
+  // its own path, and they run at the same time. A run id lets a lane that is still working for an older
+  // search finish quietly without touching the screen.
+  const laneOf = (m) => state.lanes[m] || null;
+  const activeResult = () => { const l = laneOf(state.mode); return (l && l.result) || (state.last && state.last.result) || null; };
+  const slimAlts = (list) => (list || []).map((a) => ({ for_item: a.for_item, options: (a.options || []).map((o) => ({ item_id: o.item_id })) }));
+
+  // Both lanes go to the device, so a saved plan works offline for walking and for driving.
+  function persist() {
+    if (!state.last || state.last.runId !== state.runId) return;     // the saved plan belongs to an older search
+    const lanes = {};
+    Object.keys(MODES).forEach((m) => {
+      const l = laneOf(m);
+      if (l && l.status === 'ready') lanes[m] = { result: l.result, alternatives: l.alternatives, road: l.road };
+    });
+    const primary = lanes.driving || lanes[state.mode] || lanes.walking;
+    if (!primary) return;
+    state.last = { ...state.last, result: primary.result, road: primary.road, lanes, mode: state.mode, traces: state.traces };
+    safeStore.set(SAVE_KEY, state.last);
+  }
+
+  function laneSummary(m) {
+    const l = laneOf(m);
+    if (!l || l.status === 'working') return 'working...';
+    if (l.status === 'error') return 'unavailable';
+    const route = l.result.plan.route, n = route.stops.length;
+    return n ? `${fmtMin(route.total_travel_min ?? route.total_drive_min)}, ${n} stop${n > 1 ? 's' : ''}` : 'nothing in range';
+  }
+
+  function renderModeSwitch() {
+    const el = $('#r-mode');
+    if (!Object.keys(state.lanes).length) { el.innerHTML = ''; return; }
+    el.innerHTML = `<div class="mode-switch" role="group" aria-label="How are you getting there">${Object.keys(MODES).map((m) =>
+      `<button type="button" class="mode-btn" data-action="mode" data-mode="${m}" aria-pressed="${state.mode === m}">
+        <span class="mode-name">${MODES[m].label}</span><span class="mode-sub">${esc(laneSummary(m))}</span></button>`).join('')}</div>`;
+  }
+
+  // Put the chosen lane on screen: its plan, substitutes, store lists and path.
+  function showLane(reveal) {
+    renderModeSwitch();
+    const lane = laneOf(state.mode);
+    if (!lane) return;
+    if (lane.status === 'ready') {
+      const plan = lane.result.plan, mode = modeOf(plan);
+      renderPlan(lane.result, reveal);
+      renderAlternatives(plan.alternatives, mode, plan.location.radius_km);
+      renderByItem(plan.results, false, mode, plan.location.radius_km);
+      drawRoute(plan, lane);
+      return;
+    }
+    rescueMap();                                     // the map may sit inside the section that is about to be replaced
+    mapState.token++;
+    mapState.plan = null;
+    mapState.line = null;
+    mapState.loading = false;
+    showOrigin();                                    // not the other lane's route
+    ['r-alts', 'r-items'].forEach((id) => { $('#' + id).innerHTML = ''; });
+    const word = MODES[state.mode].ing;
+    $('#r-plan').classList.remove('reveal');
+    $('#r-plan').innerHTML = lane.status === 'error'
+      ? `<p class="lede">${esc(lane.error || `The ${word} plan could not be built.`)}</p><button type="button" class="btn-quiet" data-action="retry-lane" data-mode="${state.mode}">Try the ${word} plan again</button>`
+      : `<p class="lede">Building your ${word} plan...</p>`;
+  }
+
+  function setMode(m) {
+    if (!MODES[m] || m === state.mode) return;
+    state.mode = m;
+    safeStore.set(MODE_KEY, m);
+    showLane(false);
+    persist();
+  }
+
+  // A lane that was not on screen while it was built finishes here.
+  function settleLane(mode, runId) {
+    if (runId !== state.runId) return;
+    state.finishedAt = performance.now();
+    laneOf(mode).traces.forEach((t) => state.traces.push(t));
+    persist();
+    if (state.mode === mode) showLane(false); else renderModeSwitch();
+    if (state.last && state.last.runId === runId) renderTrace();
+    prefetchRoads(runId);
+  }
+
+  async function runLane(mode, base, intent, runId) {
+    const lane = laneOf(mode);
+    try {
+      const a = await post('/api/alternatives', { ...base, mode, intent });
+      if (runId !== state.runId) return;
+      lane.alternatives = a.alternatives;
+      if (a.trace) lane.traces.push(a.trace);
+      const b = await post('/api/brief', { ...base, mode, intent, alternatives: a.alternatives });
+      if (runId !== state.runId) return;
+      lane.traces.push(b.trace);
+      lane.result = b;
+      lane.status = 'ready';
+    } catch (e) {
+      if (runId !== state.runId) return;
+      lane.status = 'error';
+      lane.error = e.message || 'This plan could not be built.';
+    }
+    settleLane(mode, runId);
+  }
+
+  function retryLane(mode) {
+    if (!MODES[mode] || !state.intent || !state.base || state.running) return;
+    state.lanes[mode] = newLane();
+    renderModeSwitch();
+    if (state.mode === mode) showLane(false);
+    const runId = state.runId;
+    runLane(mode, state.base, state.intent, runId);
   }
 
   async function run() {
@@ -532,48 +714,63 @@
     resetProgress();
     $('#progress').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     const base = { lat: loc.lat, lng: loc.lng, radius_km: state.radius, local_minutes: pacificMinutes() };
+    const runId = ++state.runId;
+    // The way of travelling on screen is built step by step below. The other one is built at the same
+    // time by its own agents, so switching is instant and neither waits for the other.
+    const fg = state.mode, bg = fg === 'driving' ? 'walking' : 'driving';
+    state.lanes = { driving: newLane(), walking: newLane() };
+    state.base = base;
+    state.intent = null;
+    state.startedAt = state.finishedAt = performance.now();
 
     try {
       setStep('understand', 'active');
       const u = await post('/api/understand', { text });
       state.traces.push(u.trace);
       setStep('understand', 'done', u.trace);
+      state.intent = u.intent;
       renderSafety(u.intent);
       renderUnderstood(u.intent);
+      renderAsk();
+      renderModeSwitch();
+      runLane(bg, base, u.intent, runId);                    // never rejects: it reports through its lane
 
       setStep('search', 'active');
-      const s = await post('/api/search', { ...base, needs: u.intent.needs });
+      const s = await post('/api/search', { ...base, mode: fg, needs: u.intent.needs });
       const checked = (s.results[0] && s.results[0].stats && s.results[0].stats.checked) || 0;
-      setStep('search', 'done', { note: `${checked} stores within ${fmtMi(state.radius)}` });
-      renderByItem(s.results, true);
+      setStep('search', 'done', { note: `${checked} stores within ${fmtMi(s.meta.radius_km)}` });
+      if (state.mode === fg) renderByItem(s.results, true, fg, s.meta.radius_km);
 
       let alts = [];
       if (s.gaps.length) {
         setStep('alternatives', 'active');
-        const a = await post('/api/alternatives', { ...base, intent: u.intent });
+        const a = await post('/api/alternatives', { ...base, mode: fg, intent: u.intent });
         alts = a.alternatives;
         state.traces.push(a.trace);
         setStep('alternatives', 'done', a.trace);
-        renderAlternatives(alts);
+        if (state.mode === fg) renderAlternatives(alts, fg, s.meta.radius_km);
       } else {
         setStep('alternatives', 'skipped');
       }
 
-      $('#r-plan').innerHTML = '<p class="lede">Building your route...</p>';
+      if (state.mode === fg) $('#r-plan').innerHTML = `<p class="lede">Building your ${MODES[fg].ing} route...</p>`;
       setStep('brief', 'active');
-      const b = await post('/api/brief', { ...base, intent: u.intent, alternatives: alts });
+      const b = await post('/api/brief', { ...base, mode: fg, intent: u.intent, alternatives: alts });
       state.traces.push(b.trace);
       setStep('brief', 'done', b.trace);
-      state.last = { savedAt: Date.now(), result: b, intent: u.intent, traces: state.traces, text, radius: state.radius, origin: loc.label };
-      renderPlan(b, true);
-      renderAlternatives(b.plan.alternatives);
-      renderByItem(b.plan.results, false);
+      state.finishedAt = performance.now();
+      Object.assign(laneOf(fg), { status: 'ready', result: b, alternatives: alts });
+      state.last = { savedAt: Date.now(), runId, result: b, intent: u.intent, traces: state.traces, text, radius: state.radius, origin: loc.label, base };
+      if (state.mode === fg) showLane(true); else renderModeSwitch();
       renderActions();
       renderTrace();
-      drawRoute(b.plan);
-      safeStore.set(SAVE_KEY, state.last);
-      $('#r-plan').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      persist();
+      prefetchRoads(runId);
+      if (state.mode === fg) $('#r-mode').scrollIntoView({ behavior: 'smooth', block: 'start' });   // the switch sits right above the plan
     } catch (e) {
+      state.runId++;                                         // a lane still working for this search must not draw over the notice
+      state.lanes = {};
+      renderModeSwitch();
       const actions = state.last || safeStore.get(SAVE_KEY) ? '<button type="button" class="btn-small" data-action="open-saved">Open last saved plan</button>' : '';
       showNotice(e.message || 'Something went wrong.', 'bad', `<button type="button" class="btn-small" data-action="retry">Try again</button> ${actions}`);
       if (e.data && e.data.intent) { renderSafety(e.data.intent); }
@@ -587,13 +784,28 @@
   function openSaved() {
     if (state.running) return;
     const saved = safeStore.get(SAVE_KEY);
-    if (!saved) return;
+    if (!saved || !saved.result) return;
     clearResults();
+    const runId = ++state.runId;
     state.radius = saved.radius;
     state.originLabel = saved.origin;
     state.traces = saved.traces || [];
-    state.last = saved;
+    state.last = { ...saved, runId };
+    state.intent = saved.intent;
+    state.startedAt = 0;
     const loc = saved.result.plan.location;
+    state.base = { ...(saved.base || { lat: loc.lat, lng: loc.lng, radius_km: saved.radius }), local_minutes: pacificMinutes() };
+    // A plan saved before there were two lanes holds just one result.
+    const stored = saved.lanes || { [modeOf(saved.result.plan)]: { result: saved.result, alternatives: [], road: saved.road } };
+    state.lanes = {};
+    Object.keys(MODES).forEach((m) => {
+      const s = stored[m];
+      state.lanes[m] = s && s.result
+        ? { ...newLane(), status: 'ready', result: s.result, alternatives: s.alternatives || [], road: s.road || null, roadState: s.road ? 'done' : 'idle' }
+        : { ...newLane(), status: 'error', error: `The ${MODES[m].ing} plan was not saved on this device. Search again to build it.` };
+    });
+    const ready = (m) => state.lanes[m] && state.lanes[m].status === 'ready';
+    state.mode = ready(saved.mode) ? saved.mode : (Object.keys(MODES).find(ready) || 'driving');
     addLocation('__saved', { lat: loc.lat, lng: loc.lng, label: saved.origin || 'Saved location' });
     $('#place').value = '__saved';
     $('#radius').value = String(saved.radius);
@@ -602,12 +814,10 @@
     $('#results').hidden = false;
     renderSafety(saved.intent);
     renderUnderstood(saved.intent);
-    renderPlan(saved.result, false);
-    renderAlternatives(saved.result.plan.alternatives);
-    renderByItem(saved.result.plan.results, false);
+    renderAsk();
+    showLane(false);
     renderActions();
     renderTrace();
-    drawRoute(saved.result.plan, saved.road);
     showNotice(`Showing the plan saved on this device at ${new Date(saved.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Stock may have changed.`);
   }
 
@@ -668,14 +878,18 @@
     }
     const act = t.dataset.action;
     if (act === 'retry') run();
-    else if (act === 'retry-road' && mapState.plan && !mapState.loading) loadRoad(mapState.plan, mapState.line);
+    else if (act === 'retry-road' && mapState.plan && !mapState.loading) {
+      const lane = laneOf(modeOf(mapState.plan));
+      if (lane) { Object.assign(lane, { road: null, roadState: 'idle', roadPromise: null, roadFailure: '' }); loadRoad(mapState.plan, mapState.line, lane); }
+    } else if (act === 'mode') setMode(t.dataset.mode);
+    else if (act === 'retry-lane') retryLane(t.dataset.mode);
     else if (act === 'open-saved') openSaved();
     else if (act === 'print') window.print();
     else if (act === 'wider') {
       const sel = $('#radius'); const i = sel.selectedIndex;
       if (i < sel.options.length - 1) { sel.selectedIndex = i + 1; run(); } else toast('Already searching the widest area.');
     } else if (act === 'copy') {
-      const text = state.last && state.last.result.plan_text;
+      const text = (activeResult() || {}).plan_text;
       if (!text) return;
       try { await navigator.clipboard.writeText(text); toast('Plan copied.'); }
       catch (err) {
@@ -685,7 +899,7 @@
       }
     } else if (act === 'sms') {
       e.preventDefault();
-      const text = state.last && state.last.result.plan_text;
+      const text = (activeResult() || {}).plan_text;
       if (text) window.location.href = 'sms:?&body=' + encodeURIComponent(text);
     }
   });
@@ -698,7 +912,11 @@
     const out = $('#fuAnswer');
     out.innerHTML = '<p class="answer">Thinking...</p>';
     try {
-      const r = await post('/api/followup', { question: q, plan_text: state.last ? state.last.result.plan_text : '' });
+      // The server rebuilds both plans from where the person is and what they need. The plan text is only a backup.
+      const alternatives = {};
+      Object.keys(MODES).forEach((m) => { const l = laneOf(m); if (l && l.status === 'ready') alternatives[m] = slimAlts(l.alternatives); });
+      const r = await post('/api/followup', { ...(state.base || {}), question: q, mode: state.mode, intent: state.intent || undefined,
+        alternatives, plan_text: (activeResult() || {}).plan_text || '' });
       out.innerHTML = `<p class="answer">${esc(r.answer)}</p>`;
       state.traces.push(r.trace);
       renderTrace();
