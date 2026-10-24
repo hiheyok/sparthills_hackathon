@@ -10,7 +10,7 @@
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="preload" href="/static/fonts/overpass-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/vendor/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=5">
+<link rel="stylesheet" href="/static/styles.css?v=6">
 </head>
 <body>
 <a class="skip" href="#text">Skip to the request form</a>
@@ -78,6 +78,7 @@
 
     <div id="results" hidden>
       <section id="r-safety" aria-live="assertive"></section>
+      <section id="r-mode" class="mode"></section>
       <section id="r-plan" class="plan" aria-labelledby="planTitle"></section>
       <section id="r-actions" class="actions"></section>
       <section id="r-alts" class="alts"></section>
@@ -99,13 +100,13 @@
 </main>
 
 <footer class="foot">
-  <p>SupplyLine is a hackathon prototype. Store names, locations and stock levels are fictional demo data, and drive times are estimates, not live traffic. This is not medical advice. In an emergency, call 911. For local help, dial 211.</p>
+  <p>SupplyLine is a hackathon prototype. Store names, locations and stock levels are fictional demo data, and drive and walk times are estimates, not live traffic or live conditions. This is not medical advice. In an emergency, call 911. For local help, dial 211.</p>
 </footer>
 
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <noscript><p class="noscript">SupplyLine needs JavaScript. In an emergency call 911. For local help dial 211.</p></noscript>
 
 <script src="/static/vendor/leaflet.js"></script>
-<script src="/static/app.js?v=6"></script>
+<script src="/static/app.js?v=7"></script>
 </body>
 </html>

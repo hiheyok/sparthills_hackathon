@@ -459,6 +459,7 @@ class AgentTests(Base):
             self.assertEqual(call["inferenceConfig"]["maxTokens"], ai.AGENTS[stage]["max_tokens"], stage)
             self.assertEqual(call["inferenceConfig"]["temperature"], ai.AGENTS[stage]["temperature"], stage)
 
+    @unittest.skipIf(ClientError is None, "botocore not installed")
     def test_a_model_that_is_not_enabled_is_skipped_by_every_agent_that_would_use_it_and_only_those(self):
         os.environ["BEDROCK_MODEL_IDS_FOLLOWUP"] = "amazon.nova-lite-v1:0"
         fake = FakeBedrock([client_error("AccessDeniedException"), INTENT, "ok", {"headline": "Go.", "steps": []}])
