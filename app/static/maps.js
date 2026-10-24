@@ -37,7 +37,7 @@
       center: { lat: 37.3382, lng: -121.8863 }, zoom: 13, mapId: config.mapId || 'DEMO_MAP_ID',
       disableDefaultUI: true, zoomControl: true,
       zoomControlOptions: { position: google.maps.ControlPosition.RIGHT_BOTTOM },
-      clickableIcons: false, gestureHandling: 'greedy', keyboardShortcuts: true,
+      clickableIcons: false, gestureHandling: 'cooperative', keyboardShortcuts: true,
     });
     const popup = new InfoWindow({ maxWidth: 290 });
     const overlays = new Set();
@@ -88,7 +88,7 @@
 
   function leafletMap(element, onTileError) {
     if (!window.L) throw new Error('The map is unavailable. Directions still work.');
-    const map = L.map(element, { zoomControl: false }).setView([37.3382, -121.8863], 13);
+    const map = L.map(element, { zoomControl: false, scrollWheelZoom: false }).setView([37.3382, -121.8863], 13);
     L.control.zoom({ position: 'bottomright' }).addTo(map);
     const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors', referrerPolicy: 'strict-origin-when-cross-origin',
