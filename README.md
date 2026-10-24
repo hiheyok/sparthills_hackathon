@@ -1,6 +1,6 @@
 # SupplyLine
 
-**When a disaster hits, tell SupplyLine what happened and what you need. It finds the nearest open stores that have it in stock, plans one short route, and when nobody has an item it finds a safe substitute that does the same job.**
+**When a disaster hits, tell SupplyLine what happened and what you need. It ranks nearby open places with stock, plans a short pickup route, and looks for safe substitutes when an item is unavailable.**
 
 Built for SpartHill Hacks 2026, AWS Track. Amazon Bedrock does the language work inside the app. Plain, testable code does the stock, hours and routing.
 
@@ -8,11 +8,13 @@ Built for SpartHill Hacks 2026, AWS Track. Amazon Bedrock does the language work
 
 ## Haven interface
 
-The web app ports Haven’s typography, cream-and-maroon palette, request card, suggestion buttons, checklist categories, connection dialog, and saved-list cards. The homepage keeps Haven’s illustration; searching opens the large map with recenter, zoom, and fullscreen controls. Drag the divider to resize the results panel, browse numbered locations by distance, and compare driving and walking details in the location card or popup. Free relief locations show their place-type badge. Street imagery uses Google Maps when a browser key is configured, with OpenStreetMap as an offline or setup fallback. The interface runs directly in the existing Python app with no JavaScript build step. Search, Bedrock stages, safety checks, road routing, reports, and offline storage still use this repository’s implementation.
+The web app ports Haven’s typography, cream-and-maroon palette, request card, suggestion buttons, checklist categories, connection dialog, and saved-list cards. The homepage keeps Haven’s illustration; searching opens the large map with recenter, zoom, and fullscreen controls. Drag the divider to resize the results panel, browse numbered locations by distance, and compare driving and walking details in the location card or popup. Free relief locations show their place-type badge. The street map uses Google Maps when a browser key is configured, with Leaflet/OpenStreetMap when the key is absent or Google fails. Saved plans work offline; neither provider's basemap is downloaded for offline use. The interface runs directly in the existing Python app with no JavaScript build step. Search, Bedrock stages, safety checks, road routing, reports, and offline storage still use this repository’s implementation.
 
-Supply checkboxes persist with the last automatic save. Use the bookmark button to keep named supply lists, open **My supply lists** to view or delete them, **Download** for a text copy with checklist progress, or select a map pin for the supplies matched at that store. The **How it works** dialog supports keyboard navigation and Escape. The original household and day-count settings are omitted. Driving and walking each have their own plan and can be compared using the travel buttons.
+Supply checkboxes persist with the last automatic save. Use the bookmark button to keep supply-list snapshots, open **My supply lists** to view or delete them, **Download** for a text copy with checklist progress, or select a map pin for the supplies matched at that store. Saved cards use the location and request as their labels; there is no custom list-name field. The **How it works** dialog supports keyboard navigation and Escape. The original household and day-count settings are omitted. Driving and walking each have their own plan and can be compared using the travel buttons.
 
-Store popups, the nearest-store browser, and the “Start at” summary show opening status in Pacific time. Hours refresh every 15 seconds and when the app returns to the foreground, including in saved plans. Regular closures show the next daily opening time; unscheduled closures show that reopening is unconfirmed. These schedules are demo data, not live Google business hours.
+Store popups, the nearest-store browser, and the first-stop summary show opening status in Pacific time. Hours refresh every 15 seconds and when the app returns to the foreground, including in saved plans. Regular closures show the next daily opening time; unscheduled closures show that reopening is unconfirmed. These updates recalculate labels from saved demo schedules; they do not fetch live Google business hours, refresh inventory, or rebuild a saved route.
+
+Map pin numbers and the store browser sort the displayed candidates by straight-line distance, including any nearest-stock suggestions outside the search radius. They are separate from the pickup order shown in **Pickup route**. Item recommendations and route selection also consider stock freshness, quantity, opening hours and a place-type preference: stores first, then distribution points, food banks, shelters and cooling/charging centers, all else equal. This is a coded heuristic, not measured reliability data. Store cards and popups request driving and walking distances through `/api/route`; until a route is available, they show a labeled estimate. Those requests share a browser queue with whole-plan routes, which receive higher priority.
 
 ## Ask about your plan (Amazon Bedrock)
 
@@ -48,8 +50,8 @@ The critical service is **getting essential supplies to a household during a dis
 ## What it does
 
 1. **Understands a messy request.** Free text like "dad uses insulin, baby needs formula" becomes a list of supplies from a fixed 70-item catalog, and it adds the needs people forget (a cooler and ice for the insulin).
-2. **Finds real availability.** For each item it checks stock, how old the stock data is, and whether the store will still be open when you arrive.
-3. **Plans a route, on foot or by car.** Up to 4 stops that cover everything, with the most urgent items first. Drive and Walk are two separate plans, not one plan with two labels: on foot the range is shorter (3 km), every leg takes longer, and a store that is open when a car arrives can be closed by the time a walker does. The map draws a road route for driving and a footpath route for walking, and one tap opens the trip in Google Maps for turn-by-turn.
+2. **Checks demo availability.** For each item it checks stock, how old the stock data is, and whether the store will still be open when you arrive.
+3. **Plans a route, on foot or by car.** Up to 4 stops, favoring urgent supplies and stores that cover several needs. Missing items and quantity shortfalls remain visible; complete coverage is not guaranteed. Drive and Walk are two separate plans: on foot the range is shorter (3 km), every leg takes longer, and a store that is open when a car arrives can be closed by the time a walker does. The map draws a road route for driving and a footpath route for walking, and one tap opens the trip in Google Maps for turn-by-turn.
 4. **Finds alternatives when something is out.** Amazon Bedrock picks substitutes, but only from items confirmed in stock near you, and only from a hand-written safe list for risky items.
 5. **Explains it in plain language.** A short briefing, a plan-question dialog, and copy, text-message and print options.
 6. **Takes neighbor reports.** "Has it", "Running low", "Sold out", "It is closed". Reports expire after 6 hours.
@@ -94,6 +96,8 @@ py local_server.py --roads on --check-routing
 ```
 
 This checks a fixed San Jose demo route, prints the number of street vertices on success, and exits with a nonzero status on failure. On Windows, a failed Python connection also tries Windows PowerShell's native HTTPS stack with certificate verification enabled. This can recover from differences in certificate-chain or proxy handling; it cannot override a network firewall or routing-service outage.
+
+On macOS, if Python has no default trusted roots and no custom `SSL_CERT_FILE` or `SSL_CERT_DIR`, the routing transport loads `/etc/ssl/cert.pem` when present. Certificate verification stays enabled.
 
 To use real Amazon Bedrock locally, put your AWS credentials in the environment first (on the event page click **Get AWS CLI credentials** and paste the exports), install boto3 (`pip install boto3`), then:
 
@@ -147,7 +151,7 @@ The stack also allows the function role `bedrock:ApplyGuardrail` on that one gua
 
 | Rubric item | Where to see it |
 |---|---|
-| Real persona and need (20) | Samantha above. Wildfire, insulin and a baby are the first example in the app. |
+| Real persona and need (20) | Samantha above. Type her wildfire, power-outage and baby-supply request into the form; the homepage suggestions are Hurricane, Power outage, Flood and Tornado. |
 | Working app (25) | Live URL after `deploy.sh`. Saved plans work offline. Automated backend and browser regression suites. |
 | AWS AI use (20) | Four Bedrock stages (understand, alternatives, briefing, follow-up) via the Converse API, with a model fallback chain, optional Guardrails, and a trace panel ("Under the hood: what Bedrock did", folded away by default) that shows the model, time and tokens for each call. |
 | Understanding what you built (15) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): what is code, what is the model, and why. |
@@ -161,7 +165,7 @@ The video script is in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 * **The data is fictional.** 53 invented stores plus 10 invented crisis-relief places (food banks, shelters, distribution points and cooling/charging centers) across San José neighborhoods, with made-up stock, generated with a fixed seed (`scripts/gen_data.py`). It shows how the app behaves in a shortage, including surfacing free community resources when stores are sold out. **These relief places are not real** — do not go to them. A real deployment would pull relief sites from official feeds (211, FEMA, county emergency management). It is not a real inventory feed.
 * **The demo stock ages in real time.** Each record's "checked N minutes ago" is counted from one snapshot time (the deploy time on AWS, the server start locally), so "fresh" stock turns into "call ahead" after a few hours. A neighbor report stays in force for its 6 hours, because it is compared with that same snapshot time. Redeploy to refresh the demo data.
 * **Drive and walk times in the plan are estimates** (straight-line distance, a detour factor and a slow fixed speed: 28 km/h by car, 4 km/h on foot). There is no live traffic, no road closures, and walking knows nothing about hills, stairs or whether a footpath is open. Walking plans stay within 3 km of you.
-* **The walking route uses a second free public service.** Footpaths come from the OpenStreetMap community's routing server at routing.openstreetmap.de, because the public OSRM demo server only routes cars (it ignores the profile in the URL). Its terms ask for the OpenStreetMap credit and a "fix the map" link (both are shown), a valid user agent, no more than one request per second and no heavy use, so the app asks for the path of the plan on screen first and the other one after it. That is fine for a demo; for real traffic run your own OSRM with a foot profile (`ROAD_ROUTING_WALK_URL`) or use Amazon Location Service.
+* **The walking route uses a second free public service.** Footpaths come from the OpenStreetMap community's routing server at routing.openstreetmap.de; driving uses the public OSRM demo server. The app shows OpenStreetMap credit and a "fix the map" link, sends a user agent, and serializes whole-plan and store-preview requests per browser page. It has no global routing-service rate limiter across users and no enforced one-second interval between calls. For real traffic, run your own OSRM with a foot profile (`ROAD_ROUTING_WALK_URL`) or use Amazon Location Service.
 * **The road route on the map comes from a free public service.** It uses the public OSRM demo server with OpenStreetMap data. That service has no uptime promise and no live traffic, so if it is down the map shows a straight dashed line and says so. Its time can differ from the plan's estimate, which is deliberately slower and includes shopping time. Your function (not the browser) calls it, so only the coordinates of your location and the stops are sent, never your IP address. For production use Amazon Location Service.
 * **The rules fallback is much weaker than the model.** It matches keywords. It is there so the app is never dead, not to replace the model. Its substitutes come from a short hand-written list (`FALLBACK_SUBS` in `ai.py`), so many items get none. Batteries never get one, because it cannot tell what they are for and a different size will not fit.
 * **Neighbor reports are unverified.** Anyone can post one, so a bad actor could mislead. The only protection today is a 6-hour expiry, a per-IP rate limit and input validation.
@@ -209,7 +213,7 @@ pip install playwright
 python3 scripts/browser_regressions.py
 ```
 
-This starts an isolated local server and Chrome session. It checks Enter and Shift+Enter, mobile search events, delayed location loading, location selection, saved plans, road geometry and retry, stale route responses, responsive layout, and offline cache updates. Routing is mocked and AI is disabled. Alternatively, run `playwright install chromium` and set `BROWSER_CHANNEL=chromium`.
+This starts an isolated local server and Chrome session. It checks request submission, delayed metadata, map-provider fallback, saved plans and supply lists, checklist progress and downloads, the plan-assistant dialog, clock-driven opening hours, distance-ranked store browsing, per-store travel details, panel resizing, fullscreen behavior, road geometry and retry, stale responses, responsive layout, and offline cache updates. Routing is mocked and AI is disabled; a fixture supplies model evidence for the assistant's Bedrock display test. Alternatively, run `playwright install chromium` and set `BROWSER_CHANNEL=chromium`.
 
 GitHub Actions runs the backend and browser regressions on Linux and Windows. The Windows tests exercise a real PowerShell request to a local fixture and verify that an untrusted HTTPS certificate is rejected.
 
@@ -223,7 +227,7 @@ GitHub Actions runs the backend and browser regressions on Linux and Windows. Th
 | `no credentials` in the trace | Export credentials (local) or check the Lambda role (deployed). The app answers with rules in the meantime. |
 | Request takes too long | Lambda is configured with a 29-second timeout and the API Gateway integration with 30 seconds. Each stage may use up to 24 seconds of model time, never more than the request has left minus a 3 second reserve. Each call gets a timeout that fits in the time left, the SDK never retries on its own, and no call or JSON repair starts with under 5 seconds left. Then the app falls back to rules. |
 | The map line is dashed and straight | The routing service could not be reached (the function may have no internet, or the free service is busy). The dashed line connects stops; it is not a driving route. Click **Retry road route** or open **Turn-by-turn in Google Maps**. Transient routing failures are retried once automatically. |
-| Map background blank | Map tiles come from OpenStreetMap and need a network. They also need the browser to send a Referer, so the app sets `Referrer-Policy: strict-origin-when-cross-origin`. A privacy extension that strips Referer will blank the tiles. The app shows a notice, and the route, stops and list still work. |
+| Map background blank | Both map providers need a network. With Google Maps, check the browser key, website restrictions and the Connections dialog; load or authorization failures use the OpenStreetMap backup. OpenStreetMap tiles also need a Referer, supplied by `Referrer-Policy: strict-origin-when-cross-origin`; an extension that strips it can block tiles. Saved lists and route content remain readable without a basemap. |
 | `deploy.sh` fails on the bucket | Set `ARTIFACT_BUCKET` to a bucket you own, or check your credentials with `aws sts get-caller-identity`. |
 
 ## Contact

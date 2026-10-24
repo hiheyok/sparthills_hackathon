@@ -1,8 +1,8 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1160" role="img" aria-labelledby="title desc" font-family="Overpass, Segoe UI, Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 1360" role="img" aria-labelledby="title desc" font-family="Overpass, Segoe UI, Helvetica, Arial, sans-serif">
 <title id="title">SupplyLine architecture and parallel planning flow</title>
 <desc id="desc">The browser calls an API Gateway HTTP API and one Python Lambda. Lambda serves the app, checks inventory, calls Bedrock Converse with local rules fallbacks, stores neighbor reports in DynamoDB, and fetches driving and walking geometry from OSRM services. The browser separately loads Google Maps or OpenStreetMap tiles. After understanding once, foreground and background plans build concurrently; follow-up questions are handled on demand.</desc>
 <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#4e6172"/></marker></defs>
-<rect width="1500" height="1160" fill="#eef3f7"/>
+<rect width="1500" height="1360" fill="#eef3f7"/>
 <text x="40" y="54" font-size="32" fill="#142738" font-weight="700">SupplyLine architecture</text>
 <text x="40" y="84" font-size="17" fill="#4e6172">Code checks stock, hours, safety and stop order. Bedrock understands requests, selects substitutes and writes answers.</text>
 <rect x="410" y="110" width="1050" height="690" rx="12" fill="none" stroke="#4e6172" stroke-width="2" stroke-dasharray="9 7"/>
@@ -12,13 +12,13 @@
 <text x="462" y="208" font-size="15" fill="#4e6172">Serves the web app and JSON API through one Lambda integration; throttled</text>
 <rect x="40" y="155" width="320" height="245" rx="12" fill="white" stroke="#142738" stroke-width="2"/>
 <text x="60" y="188" font-size="21" fill="#142738" font-weight="700">Browser / installable app</text>
-<text x="60" y="220" font-size="17" fill="#142738">Request form and progress</text>
-<text x="60" y="244" font-size="17" fill="#142738">Driving and walking plans</text>
-<text x="60" y="268" font-size="17" fill="#142738">Follow-up questions on demand</text>
+<text x="60" y="220" font-size="15" fill="#142738">Request form; Drive / Walk plans</text>
+<text x="60" y="244" font-size="15" fill="#142738">Checklist + Ask about plan dialog</text>
+<text x="60" y="268" font-size="15" fill="#142738">Resizable panel; distance-ranked pins</text>
 <rect x="60" y="295" width="280" height="85" rx="12" fill="#e3edfa" stroke="#1459a4" stroke-width="2"/>
-<text x="76" y="321" font-size="16" fill="#1459a4" font-weight="700">Saved plans available offline</text>
+<text x="76" y="321" font-size="16" fill="#1459a4" font-weight="700">Saved content available offline</text>
 <text x="76" y="345" font-size="14" fill="#142738">Service worker: app shell</text>
-<text x="76" y="365" font-size="14" fill="#142738">Local storage: plans + road paths</text>
+<text x="76" y="365" font-size="14" fill="#142738">Local storage: plans, lists + paths</text>
 <path d="M360 190 H438" fill="none" stroke="#4e6172" stroke-width="2.5" marker-end="url(#arrow)"/>
 <text x="371" y="180" font-size="12" fill="#4e6172">HTTPS</text>
 <path d="M765 225 V258" fill="none" stroke="#4e6172" stroke-width="2.5" marker-end="url(#arrow)"/>
@@ -31,9 +31,9 @@
 <text x="472" y="405" font-size="13" fill="#142738">static files, orchestration</text>
 <rect x="655" y="310" width="195" height="125" rx="12" fill="#e3edfa" stroke="#1459a4" stroke-width="2"/>
 <text x="667" y="337" font-size="17" fill="#1459a4" font-weight="700">engine.py + geo.py</text>
-<text x="667" y="361" font-size="13" fill="#142738">Stock, hours, distance</text>
-<text x="667" y="383" font-size="13" fill="#142738">Quantities, safety rules</text>
-<text x="667" y="405" font-size="13" fill="#142738">Stops and arrival estimates</text>
+<text x="667" y="361" font-size="13" fill="#142738">Stock, hours, quantities</text>
+<text x="667" y="383" font-size="13" fill="#142738">Safety + place-type ranking</text>
+<text x="667" y="405" font-size="13" fill="#142738">Stop order + ETA estimates</text>
 <rect x="865" y="310" width="205" height="125" rx="12" fill="#fff4cc" stroke="#9b6a00" stroke-width="2"/>
 <text x="877" y="337" font-size="17" fill="#9b6a00" font-weight="700">ai.py</text>
 <text x="877" y="361" font-size="13" fill="#142738">Four task prompts</text>
@@ -108,12 +108,30 @@
 <path d="M245 960 H270 V928 H298" fill="none" stroke="#4e6172" stroke-width="2.5" marker-end="url(#arrow)"/>
 <path d="M270 960 V998 H298" fill="none" stroke="#4e6172" stroke-width="2.5" marker-end="url(#arrow)"/>
 <rect x="1170" y="902" width="290" height="122" rx="12" fill="#e3edfa" stroke="#1459a4" stroke-width="2"/>
-<text x="1188" y="934" font-size="18" fill="#1459a4" font-weight="700">/api/route for ready plans</text>
-<text x="1188" y="961" font-size="14" fill="#142738">Selected lane first, then the other</text>
-<text x="1188" y="987" font-size="14" fill="#142738">Geometry saved with each plan</text>
+<text x="1188" y="934" font-size="18" fill="#1459a4" font-weight="700">/api/route queue</text>
+<text x="1188" y="960" font-size="14" fill="#142738">Whole-plan paths take priority</text>
+<text x="1188" y="983" font-size="14" fill="#142738">Store previews share the queue</text>
+<text x="1188" y="1006" font-size="14" fill="#142738">One active request per page</text>
 <path d="M1120 928 H1168" fill="none" stroke="#4e6172" stroke-width="2.5" marker-end="url(#arrow)"/>
 <path d="M1120 998 H1168" fill="none" stroke="#4e6172" stroke-width="2.5" marker-end="url(#arrow)"/>
-<text x="40" y="1060" font-size="16" fill="#142738">On demand: /api/followup → server rebuilds both plans → Bedrock answer, available once needs are understood.</text>
-<text x="40" y="1094" font-size="16" fill="#4e6172">Failure behavior: background errors offer a lane retry; foreground errors clear both lanes and show the main retry notice.</text>
-<text x="40" y="1125" font-size="16" fill="#4e6172">Local mode: the same handler via local_server.py; reports use memory + local_data/reports.json by default.</text>
+<text x="40" y="1060" font-size="16" fill="#142738">Store previews: selected/browsed store → /api/route for Drive + Walk; estimates stay labeled until routed results arrive.</text>
+<text x="40" y="1090" font-size="16" fill="#4e6172">Pin numbers = straight-line distance rank. Pickup route = the engine’s chosen stop order.</text>
+<text x="40" y="1120" font-size="16" fill="#142738">Ask about plan → /api/followup → server rebuilds both plans → Bedrock or labeled rules answer, once needs are understood.</text>
+<rect x="40" y="1150" width="450" height="125" rx="12" fill="#f5f7fa" stroke="#bdcbd7" stroke-width="2"/>
+<text x="58" y="1179" font-size="18" fill="#142738" font-weight="700">Device storage</text>
+<text x="58" y="1207" font-size="15" fill="#142738">Last plan + bookmarked snapshots</text>
+<text x="58" y="1232" font-size="15" fill="#142738">Checklist, selected store, travel cache</text>
+<text x="58" y="1257" font-size="15" fill="#142738">No accounts or cross-device sync</text>
+<rect x="525" y="1150" width="450" height="125" rx="12" fill="#f5f7fa" stroke="#bdcbd7" stroke-width="2"/>
+<text x="543" y="1179" font-size="18" fill="#142738" font-weight="700">Hours display</text>
+<text x="543" y="1207" font-size="15" fill="#142738">Pacific-time labels every 15 seconds</text>
+<text x="543" y="1232" font-size="15" fill="#142738">Recomputed from demo schedules</text>
+<text x="543" y="1257" font-size="15" fill="#142738">No automatic inventory or route refresh</text>
+<rect x="1010" y="1150" width="450" height="125" rx="12" fill="#f5f7fa" stroke="#bdcbd7" stroke-width="2"/>
+<text x="1028" y="1179" font-size="18" fill="#142738" font-weight="700">Routing and offline limits</text>
+<text x="1028" y="1207" font-size="15" fill="#142738">Per-page queue; no global rate limiter</text>
+<text x="1028" y="1232" font-size="15" fill="#142738">Plan ETAs still come from the engine</text>
+<text x="1028" y="1257" font-size="15" fill="#142738">No downloaded basemap or fresh stock</text>
+<text x="40" y="1307" font-size="16" fill="#4e6172">Failure behavior: background errors offer a lane retry; foreground errors clear both lanes and show the main retry notice.</text>
+<text x="40" y="1335" font-size="16" fill="#4e6172">Local mode: the same handler via local_server.py; reports use memory + local_data/reports.json by default.</text>
 </svg>
