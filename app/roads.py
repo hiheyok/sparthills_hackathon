@@ -1,16 +1,19 @@
-"""Road routing for the map: the fastest drive through the plan's stops, in order.
+"""Road routing for the map: the fastest drive or walk through the plan's stops, in order.
 
 The stops and their order come from engine.py. This module only asks a routing
-service for the actual road path between those points, so the map can draw it.
+service for the actual path between those points, so the map can draw it.
 
-It uses the public OSRM demo server (OpenStreetMap road data). That is a free
-community service with no uptime promise, so everything here fails soft: if it
-cannot answer, the app keeps working and the map shows a straight line.
-The browser never calls it directly. Our function does, so the person's IP address
-is not sent to a third party and the page's Content Security Policy stays strict.
+Two free community services (OpenStreetMap data), one per way of travelling:
+  driving  the public OSRM demo server. It only routes cars and ignores the profile in the URL.
+  walking  the OpenStreetMap community's foot-profile OSRM (routing.openstreetmap.de). It can use
+           footpaths, stairs and crossings that a car route never would.
+Neither has an uptime promise, so everything here fails soft: if one cannot answer, the app keeps
+working and the map shows a straight line. The browser never calls them directly. Our function
+does, so the person's IP address is not sent to a third party and the page's Content Security
+Policy stays strict.
 
-For production, swap fetch_route() for Amazon Location Service CalculateRoutes.
-The return shape would stay the same.
+For production, swap fetch_route() for Amazon Location Service CalculateRoutes (it has car and
+pedestrian travel modes). The return shape would stay the same.
 """
 import json
 import logging
@@ -18,6 +21,7 @@ import math
 import os
 import socket
 import ssl
+import threading
 import time
 import urllib.error
 from collections import OrderedDict
@@ -27,6 +31,11 @@ import road_transport
 log = logging.getLogger("supplyline")
 
 BASE_URL = os.environ.get("ROAD_ROUTING_URL", "https://router.project-osrm.org")
+WALK_URL = os.environ.get("ROAD_ROUTING_WALK_URL", "https://routing.openstreetmap.de/routed-foot")
+SOURCES = {
+    "driving": "OpenStreetMap roads via OSRM, no live traffic",
+    "walking": "OpenStreetMap footpaths and roads via routing.openstreetmap.de, no live conditions",
+}
 USER_AGENT = "SupplyLine-hackathon-demo/1.0"
 TIMEOUT_S = 6
 MAX_POINTS = 8
@@ -36,6 +45,7 @@ CACHE_MAX_VERTICES = 100000
 CACHE_TTL_S = 600
 
 _cache = OrderedDict()
+_cache_lock = threading.Lock()   # the walking and driving routes are fetched at the same time
 
 
 class RoadsUnavailable(Exception):
@@ -86,19 +96,27 @@ def _measure(value, scale, precision):
     return round(value / scale, precision)
 
 
-def fetch_route(points):
-    """points: list of (lat, lng), start first. Returns the fastest driving route through them in order."""
+def fetch_route(points, mode="driving"):
+    """points: list of (lat, lng), start first. Returns the fastest route through them in order,
+    by car (mode "driving") or on foot (mode "walking")."""
+    if mode not in SOURCES:
+        raise RoadsUnavailable("Directions are not available for that way of travelling.", "bad_mode")
     if os.environ.get("ROAD_ROUTING", "on").lower() == "off":
         raise RoadsUnavailable("Road directions are turned off on the server. Restart it with ROAD_ROUTING=on.", "disabled")
-    key = tuple((round(lat, 5), round(lng, 5)) for lat, lng in points)
+    pts = tuple((round(lat, 5), round(lng, 5)) for lat, lng in points)
+    key = (mode,) + pts
     now = time.time()
-    hit = _cache.get(key)
-    if hit and now - hit[0] < CACHE_TTL_S:
-        _cache.move_to_end(key)
-        return hit[1]
+    with _cache_lock:
+        hit = _cache.get(key)
+        if hit and now - hit[0] < CACHE_TTL_S:
+            _cache.move_to_end(key)
+            return hit[1]
 
-    coords = ";".join(f"{lng:.5f},{lat:.5f}" for lat, lng in key)
-    url = f"{BASE_URL}/route/v1/driving/{coords}?overview=full&geometries=geojson&steps=false&alternatives=false"
+    coords = ";".join(f"{lng:.5f},{lat:.5f}" for lat, lng in pts)
+    # Both services take "driving" as the profile in the URL: the walking server picks its foot
+    # profile from its own path (/routed-foot), not from this segment.
+    base = WALK_URL if mode == "walking" else BASE_URL
+    url = f"{base}/route/v1/driving/{coords}?overview=full&geometries=geojson&steps=false&alternatives=false"
     # One retry for a transient transport failure, within the API's 29-second budget.
     for attempt in range(2):
         try:
@@ -127,13 +145,14 @@ def fetch_route(points):
                 for l in r.get("legs", [])]
         result = {"path": path, "duration_min": _measure(r["duration"], 60, 1),
                   "distance_km": _measure(r["distance"], 1000, 2), "legs": legs,
-                  "source": "OpenStreetMap roads via OSRM, no live traffic"}
+                  "mode": mode, "source": SOURCES[mode]}
     except RoadsUnavailable:
         raise
     except (AttributeError, KeyError, IndexError, TypeError, ValueError) as e:
         log.warning("road routing unavailable (invalid_geometry)")
         raise RoadsUnavailable("The routing service returned an invalid road path. Retry road routing.", "invalid_geometry") from e
-    _cache[key] = (now, result)
-    while len(_cache) > CACHE_MAX or sum(len(v[1]["path"]) for v in _cache.values()) > CACHE_MAX_VERTICES:
-        _cache.popitem(last=False)
+    with _cache_lock:
+        _cache[key] = (now, result)
+        while len(_cache) > CACHE_MAX or sum(len(v[1]["path"]) for v in _cache.values()) > CACHE_MAX_VERTICES:
+            _cache.popitem(last=False)
     return result

@@ -10,7 +10,24 @@ Built for SpartHill Hacks 2026, AWS Track. Amazon Bedrock does the language work
 
 The web app ports the latest Haven export’s typography, cream-and-maroon palette, request card, suggestion buttons, checklist categories, connection dialog, and saved-list cards into the existing large-map layout. The map is visible before searching and includes recenter, zoom, and fullscreen controls; street imagery uses Google Maps when a browser key is configured, with OpenStreetMap as an offline or setup fallback. The interface runs directly in the existing Python app with no JavaScript build step. Search, Bedrock stages, safety checks, road routing, reports, and offline storage still use this repository’s implementation.
 
-Supply checkboxes persist with the last automatic save. Use the bookmark button to keep named supply lists, open **My supply lists** to view or delete them, **Download** for a text copy with checklist progress, or select a map pin for the supplies matched at that store. The **How it works** dialog supports keyboard navigation and Escape. Household/day settings and walking filters from Haven are omitted because this backend does not support those planning controls.
+Supply checkboxes persist with the last automatic save. Use the bookmark button to keep named supply lists, open **My supply lists** to view or delete them, **Download** for a text copy with checklist progress, or select a map pin for the supplies matched at that store. The **How it works** dialog supports keyboard navigation and Escape. The original household and day-count settings are omitted. Driving and walking each have their own plan and can be compared using the travel buttons.
+
+Store popups, the nearest-store browser, and the “Start at” summary show opening status in Pacific time. Hours refresh every 15 seconds and when the app returns to the foreground, including in saved plans. Regular closures show the next daily opening time; unscheduled closures show that reopening is unconfirmed. These schedules are demo data, not live Google business hours.
+
+## Ask about your plan (Amazon Bedrock)
+
+After creating a plan, select **Ask about plan** above the results. Ask about missing supplies, alternatives, stores, or whether to walk or drive. Suggested questions help start the interaction without adding another form at the bottom of the page.
+
+Questions call `/api/followup`, which rebuilds both plans on the server and sends their facts to Amazon Bedrock through the Converse API. Answers identify whether Bedrock or the rules fallback responded. **Run details** shows the actual model, region, elapsed time, and token usage; the same call appears in **Under the hood**. Closing the dialog keeps the current question and answer until the plan or travel mode changes.
+
+For live AI locally, install `boto3`, configure AWS credentials privately in your terminal or an AWS profile, then run:
+
+```bash
+python3 -m pip install boto3
+python3 local_server.py --ai bedrock --roads on
+```
+
+AWS credentials stay on the server. They are never needed in browser code or Git. Temporary hackathon credentials expire and must be refreshed through the event portal. `--ai off` deliberately uses the clearly labeled fallback; it is not evidence of a live Bedrock call.
 
 ## Google Maps
 
@@ -34,7 +51,7 @@ The critical service is **getting essential supplies to a household during a dis
 2. **Finds real availability.** For each item it checks stock, how old the stock data is, and whether the store will still be open when you arrive.
 3. **Plans a route.** Up to 4 stops that cover everything, with the most urgent items first. The map draws the fastest road route through them in that order, and one tap opens the whole trip in Google Maps for turn-by-turn with live traffic.
 4. **Finds alternatives when something is out.** Amazon Bedrock picks substitutes, but only from items confirmed in stock near you, and only from a hand-written safe list for risky items.
-5. **Explains it in plain language.** A short briefing, a follow-up question box, and copy, text-message and print options.
+5. **Explains it in plain language.** A short briefing, a plan-question dialog, and copy, text-message and print options.
 6. **Takes neighbor reports.** "Has it", "Running low", "Sold out", "It is closed". Reports expire after 6 hours.
 7. **Never gambles with safety.** See below.
 

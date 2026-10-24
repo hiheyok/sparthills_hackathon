@@ -1,12 +1,17 @@
 {
-  "name": "Haven",
-  "short_name": "Haven",
+  "name": "SupplyLine",
+  "short_name": "SupplyLine",
   "description": "Find open stores with the supplies you need in a disaster, or a safe alternative when nobody has them.",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#faf9f6",
   "theme_color": "#722b42",
   "icons": [
-    { "src": "/static/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+    {
+      "src": "/static/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
   ]
 }

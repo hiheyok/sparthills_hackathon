@@ -4,9 +4,11 @@ These verify OUR code around Bedrock (request shape, JSON validation, repair
 retry, model fallback chain, safety enforcement, rules fallback). They do not
 call AWS; see scripts/bedrock_check.py for a real end-to-end call.
 """
+import contextlib
 import json
 import os
 import sys
+import threading
 import time
 import unittest
 from unittest import mock
@@ -416,11 +418,227 @@ class BriefTests(Base):
 
 
 class FollowupTests(Base):
+    def test_followup_removes_model_formatting_from_plain_text_answers(self):
+        ai.set_client(FakeBedrock(['Visit **Fresh Basket** at `10:00 AM`.']))
+        ans, trace = ai.followup('Which store first?', 'PLAN text')
+        self.assertEqual(ans, 'Visit Fresh Basket at 10:00 AM.')
+        self.assertEqual(trace['mode'], 'bedrock')
+
     def test_followup_returns_plain_text(self):
         ai.set_client(FakeBedrock(["Yes. Keep the insulin cool, not frozen."]))
         ans, trace = ai.followup("Can the insulin go in the cooler?", "PLAN text")
         self.assertIn("insulin", ans)
         self.assertEqual(trace["mode"], "bedrock")
+
+
+class AgentTests(Base):
+    """Every task is its own agent: its own settings and, if wanted, its own model chain."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.dict(os.environ)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        for var in [v for v in os.environ if v.startswith("BEDROCK_MODEL_IDS")]:
+            os.environ.pop(var)
+
+    def test_a_task_chain_beats_the_shared_chain_which_beats_the_defaults(self):
+        self.assertEqual(ai.model_chain("brief"), ai.DEFAULT_MODELS)
+        os.environ["BEDROCK_MODEL_IDS"] = "model-a, model-b"
+        os.environ["BEDROCK_MODEL_IDS_BRIEF"] = "model-c"
+        self.assertEqual(ai.model_chain("understand"), ["model-a", "model-b"])
+        self.assertEqual(ai.model_chain("brief"), ["model-c"])
+        self.assertEqual(ai.model_chain(), ["model-a", "model-b"])
+        os.environ["BEDROCK_MODEL_IDS_BRIEF"] = " , "          # blank means "not set"
+        self.assertEqual(ai.model_chain("brief"), ["model-a", "model-b"])
+
+    def test_each_agent_calls_its_own_model_with_its_own_settings(self):
+        os.environ["BEDROCK_MODEL_IDS_FOLLOWUP"] = "amazon.nova-lite-v1:0"
+        fake = FakeBedrock([INTENT, "Yes, go now."])
+        ai.set_client(fake)
+        ai.understand("insulin please")
+        ai.followup("Is it open?", "PLAN")
+        understand_call, followup_call = fake.calls
+        self.assertEqual(understand_call["modelId"], ai.DEFAULT_MODELS[0])
+        self.assertEqual(followup_call["modelId"], "amazon.nova-lite-v1:0")
+        for call, stage in ((understand_call, "understand"), (followup_call, "followup")):
+            self.assertEqual(call["inferenceConfig"]["maxTokens"], ai.AGENTS[stage]["max_tokens"], stage)
+            self.assertEqual(call["inferenceConfig"]["temperature"], ai.AGENTS[stage]["temperature"], stage)
+
+    @unittest.skipIf(ClientError is None, "botocore not installed")
+    def test_a_model_that_is_not_enabled_is_skipped_by_every_agent_that_would_use_it_and_only_those(self):
+        os.environ["BEDROCK_MODEL_IDS_FOLLOWUP"] = "amazon.nova-lite-v1:0"
+        fake = FakeBedrock([client_error("AccessDeniedException"), INTENT, "ok", {"headline": "Go.", "steps": []}])
+        ai.set_client(fake)
+        ai.understand("insulin please")                       # the default first model is not enabled for this account
+        ai.followup("Is it open?", "PLAN")                    # its own model, untouched by that
+        needs = [{"item_id": "insulin", "label": "insulin", "qty": 1, "priority": 1, "inferred": False, "why": ""}]
+        plan = engine.build_plan(needs, [], 37.3382, -121.8863, 8, 600, {}, time.time())
+        ai.brief(plan, {"disaster": {}, "household": {}, "urgent_safety": {"flag": False}})   # remembers, skips the first
+        self.assertEqual([c["modelId"] for c in fake.calls],
+                         [ai.DEFAULT_MODELS[0], ai.DEFAULT_MODELS[1], "amazon.nova-lite-v1:0", ai.DEFAULT_MODELS[1]])
+
+    def test_status_lists_every_agent_and_its_models(self):
+        os.environ["BEDROCK_MODEL_IDS_BRIEF"] = "model-c"
+        agents = ai.status()["agents"]
+        self.assertEqual(set(agents), {"understand", "alternatives", "brief", "followup"})
+        self.assertEqual(agents["brief"]["models"], ["model-c"])
+        self.assertEqual(agents["followup"]["models"], ai.DEFAULT_MODELS)
+        self.assertEqual(ai.status()["models"], ai.DEFAULT_MODELS)
+
+
+class LaneTests(Base):
+    """Driving and walking are separate lanes: each has its own substitutes and briefing agents."""
+
+    def plan(self, mode):
+        needs = [{"item_id": "insulin", "label": "insulin", "qty": 1, "priority": 1, "inferred": False, "why": ""}]
+        return engine.build_plan(needs, [], 37.3382, -121.8863, 8, 600, {}, time.time(), mode=mode)
+
+    INTENT_ARGS = {"disaster": {"type": "wildfire"}, "household": {}, "urgent_safety": {"flag": False}}
+
+    def test_a_briefing_knows_its_lane_and_the_prompt_says_how_the_person_travels(self):
+        fake = FakeBedrock([{"headline": "Go.", "steps": []}, {"headline": "Go.", "steps": []}])
+        ai.set_client(fake)
+        _, walk = ai.brief(self.plan("walking"), self.INTENT_ARGS)
+        _, drive = ai.brief(self.plan("driving"), self.INTENT_ARGS)
+        self.assertEqual((walk["agent"], walk["lane"], drive["lane"]), ("brief", "walking", "driving"))
+        walk_prompt, drive_prompt = (c["messages"][0]["content"][0]["text"] for c in fake.calls)
+        self.assertIn('"travel_mode": "walking"', walk_prompt)
+        self.assertIn('"travel_mode": "driving"', drive_prompt)
+        self.assertIn("never suggest driving", fake.calls[0]["system"][0]["text"])
+
+    @staticmethod
+    def only_a_far_pharmacy():
+        """One store 2.5 km away: 7 minutes by car, 47 on foot."""
+        shop = {"id": "far", "name": "Far Pharmacy", "type": "pharmacy", "hood": "x", "lat": 37.3382 + 0.0225,
+                "lng": -121.8863, "hours": {"always": True}, "status": "open", "note": "",
+                "inv": {"insulin": {"q": 10, "age": 5}}}
+        stack = contextlib.ExitStack()
+        stack.enter_context(mock.patch.object(engine, "STORES", [shop]))
+        stack.enter_context(mock.patch.object(engine, "STORE_BY_ID", {"far": shop}))
+        return stack
+
+    def test_the_rules_briefing_for_a_walker_says_on_foot_and_adds_walking_advice(self):
+        patcher = mock.patch.dict(os.environ, {"AI_MODE": "off"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with self.only_a_far_pharmacy():
+            walk, drive = self.plan("walking"), self.plan("driving")
+        self.assertGreaterEqual(walk["route"]["total_min"], 30)
+        w, wt = ai.brief(walk, self.INTENT_ARGS)
+        d, dt = ai.brief(drive, self.INTENT_ARGS)
+        self.assertEqual((wt["mode"], wt["lane"], dt["lane"]), ("rules", "walking", "driving"))
+        self.assertIn("on foot", w["headline"])
+        self.assertIn("on foot", w["summary"])
+        self.assertTrue(any("long walk" in n for n in w["safety_notes"]))
+        self.assertNotIn("on foot", d["headline"] + d["summary"])
+        self.assertFalse(any("long walk" in n for n in d["safety_notes"]))
+
+    def test_a_walker_with_nothing_in_range_is_pointed_at_the_driving_plan(self):
+        patcher = mock.patch.dict(os.environ, {"AI_MODE": "off"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        with mock.patch.object(engine, "STORES", []), mock.patch.object(engine, "STORE_BY_ID", {}):
+            plan = self.plan("walking")
+        brief, _ = ai.brief(plan, self.INTENT_ARGS)
+        self.assertIn("walking distance", brief["headline"])
+        self.assertIn("driving plan", brief["summary"])
+
+    def test_the_substitutes_agent_is_told_when_the_person_is_on_foot(self):
+        fake = FakeBedrock([{"alternatives": [{"for_item": "water_bottled", "options": []}]}])
+        ai.set_client(fake)
+        gaps = [{"item_id": "water_bottled", "label": "water", "priority": 1, "why": ""}]
+        _, trace = ai.alternatives(gaps, {"water_filter": {"dist_km": 1.0}}, {"disaster": {}, "household": {}}, "walking")
+        self.assertEqual((trace["agent"], trace["lane"]), ("alternatives", "walking"))
+        self.assertIn('"travel_mode": "walking"', fake.calls[0]["messages"][0]["content"][0]["text"])
+        self.assertIn("light and easy to carry", fake.calls[0]["system"][0]["text"])
+
+    def test_the_two_lanes_agents_are_inside_bedrock_at_the_same_time(self):
+        """A barrier that only opens when both lanes' briefing agents are mid-call. If anything
+        made the lanes take turns (a lock, a shared queue) the barrier would time out and the
+        lanes would fall back to rules, which this test would catch."""
+        import handler
+        arrive = threading.Barrier(2, timeout=3)
+        crossed = []                                               # threads that met the other lane at the barrier
+
+        class Concurrent:
+            def converse(self, **kw):
+                if "intake analyst" in kw["system"][0]["text"]:
+                    text = json.dumps({"needs": [{"item_id": "food_canned", "label": "canned food", "priority": 2}]})
+                else:
+                    arrive.wait()                              # returns only when the other lane is also in here
+                    crossed.append(threading.get_ident())
+                    text = json.dumps({"headline": "Go.", "steps": []})
+                return {"output": {"message": {"role": "assistant", "content": [{"text": text}]}},
+                        "usage": {"inputTokens": 1, "outputTokens": 1}}
+
+        ai.set_client(Concurrent())
+        body = {"text": "canned food please", "lat": 37.3382, "lng": -121.8863, "radius_km": 8, "local_minutes": 600,
+                "modes": ["driving", "walking"]}
+        for mode in ("driving", "walking"):                        # no substitutes needed: one briefing call per lane
+            self.assertEqual(handler.api_search(dict(body, mode=mode, needs=[{"item_id": "food_canned"}]))["gaps"], [], mode)
+        started = time.monotonic()
+        out = handler.api_plan(body)
+        self.assertLess(time.monotonic() - started, 2.5, "the lanes waited for each other's timeout instead of overlapping")
+        self.assertEqual(len(crossed), 2)
+        self.assertEqual(len(set(crossed)), 2, "both briefing agents must be inside Bedrock on different threads at once")
+        traces = [t for t in out["traces"] if t["stage"] == "brief"]
+        self.assertEqual({t["lane"] for t in traces}, {"driving", "walking"})
+        self.assertEqual({t["mode"] for t in traces}, {"bedrock"}, [t.get("reason") for t in traces])
+        self.assertEqual([t["fell_back_from"] for t in traces], [[], []])      # first model answered, no quiet fallback
+        self.assertEqual(set(out["lanes"]), {"driving", "walking"})
+        self.assertEqual(out["lanes"]["walking"]["plan"]["mode"], "walking")
+        self.assertEqual(out["plan"]["mode"], "driving")           # the original keys are the first lane
+
+
+class AssistantTests(Base):
+    SITUATION = {"local_time": "10:00 AM", "selected_mode": "walking",
+                 "plans": {"driving": {"stops": [{"store": "Alder Pharmacy", "minutes_to_get_there": 4,
+                                                  "arrive": "10:04 AM", "hours": "until 9:00 PM"}],
+                                       "total_minutes_with_shopping": 20},
+                           "walking": {"stops": [], "total_minutes_with_shopping": 0}}}
+
+    def test_the_model_is_given_the_situation_and_the_question(self):
+        fake = FakeBedrock(["Walking will not work: nothing is in range. Driving takes 20 minutes."])
+        ai.set_client(fake)
+        ans, trace = ai.assistant("Can I walk instead?", self.SITUATION, "SUPPLYLINE PLAN text")
+        prompt = fake.calls[0]["messages"][0]["content"][0]["text"]
+        self.assertTrue(prompt.startswith("SITUATION\n"))
+        self.assertIn('"selected_mode":"walking"', prompt)
+        self.assertIn("Alder Pharmacy", prompt)
+        self.assertIn("PLAN TEXT\nSUPPLYLINE PLAN text", prompt)
+        self.assertTrue(prompt.endswith("QUESTION\nCan I walk instead?"))
+        self.assertEqual((trace["agent"], trace["mode"]), ("followup", "bedrock"))
+        self.assertIn("Use ONLY SITUATION", fake.calls[0]["system"][0]["text"])
+
+    def test_with_no_situation_it_is_the_original_follow_up(self):
+        fake = FakeBedrock(["Yes."])
+        ai.set_client(fake)
+        ai.followup("Can the dog come?", "PLAN text")
+        prompt = fake.calls[0]["messages"][0]["content"][0]["text"]
+        self.assertNotIn("SITUATION", prompt)
+        self.assertIn("PLAN TEXT\nPLAN text", prompt)
+
+    def test_without_a_model_it_still_answers_from_the_plans(self):
+        patcher = mock.patch.dict(os.environ, {"AI_MODE": "off"})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        ans, trace = ai.assistant("Will the pharmacy still be open?", self.SITUATION)
+        self.assertEqual(trace["mode"], "rules")
+        self.assertIn("Driving: 1 stop", ans)
+        self.assertIn("Walking (shown): no open store within reach", ans)
+        self.assertIn("Driving arrivals: Alder Pharmacy about 10:04 AM (until 9:00 PM)", ans)   # the question was about hours
+        self.assertIn("not reachable", ans)
+        plain, _ = ai.assistant("Is it ok?", None)
+        self.assertTrue(plain.startswith("The AI model is not reachable right now"))
+
+    def test_a_danger_in_the_question_always_leads_with_911_even_if_the_model_forgets(self):
+        ai.set_client(FakeBedrock(["Walk to the pharmacy, it takes 20 minutes."]))
+        ans, _ = ai.assistant("My dad can't breathe, should we walk to the pharmacy?", self.SITUATION)
+        self.assertTrue(ans.startswith("Call 911 now"), ans)
+        ai.set_client(FakeBedrock(["Call 911. Then stay with him."]))
+        ans, _ = ai.assistant("My dad can't breathe", self.SITUATION)
+        self.assertTrue(ans.startswith("Call 911."), ans)                        # the model already did: no second warning
 
 
 if __name__ == "__main__":

@@ -6,10 +6,13 @@ Both transports verify HTTPS certificates; neither receives browser credentials.
 """
 import base64
 import json
+import os
+import ssl
 import subprocess
 import sys
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 IS_WINDOWS = sys.platform == "win32"
 MAX_RESPONSE_BYTES = 3_000_000
@@ -50,10 +53,22 @@ def _windows_fetch(url, timeout, user_agent):
     return raw
 
 
+def _ssl_context():
+    context = ssl.create_default_context()
+    # python.org installs on macOS can lack their optional OpenSSL CA bundle.
+    # Use the OS certificate bundle only when no default roots or custom bundle exist.
+    system_bundle = Path("/etc/ssl/cert.pem")
+    if (sys.platform == "darwin" and not os.environ.get("SSL_CERT_FILE")
+            and not os.environ.get("SSL_CERT_DIR") and not context.get_ca_certs()
+            and system_bundle.is_file()):
+        context.load_verify_locations(cafile=str(system_bundle))
+    return context
+
+
 def fetch(url, timeout, user_agent):
     req = urllib.request.Request(url, headers={"User-Agent": user_agent, "Accept": "application/json"})
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as response:
+        with urllib.request.urlopen(req, timeout=timeout, context=_ssl_context()) as response:
             return response.read(MAX_RESPONSE_BYTES)
     except urllib.error.HTTPError:
         # An HTTP rejection came from the service; changing TLS stacks cannot fix it.

@@ -5,6 +5,7 @@ import os
 import sys
 import unittest
 from unittest import mock
+import unittest.mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 os.environ["AI_MODE"] = "off"          # deterministic: rules fallback, no AWS calls
@@ -40,7 +41,7 @@ class HandlerTests(unittest.TestCase):
     def test_static_files_and_security_headers(self):
         status, headers, body = call("GET", "/")
         self.assertEqual(status, 200)
-        self.assertIn(b"Haven", body)
+        self.assertIn(b"SupplyLine", body)
         self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
         for path, ctype in [("/static/app.js", "javascript"), ("/static/maps.js", "javascript"), ("/static/haven.css", "text/css"), ("/static/haven-port.css", "text/css"), ("/static/styles.css", "text/css"),
@@ -244,7 +245,115 @@ class HandlerTests(unittest.TestCase):
         status, body = post("/api/followup", {"question": "Can I bring the dog?", "plan_text": "PLAN"})
         self.assertEqual(status, 200)
         self.assertEqual(body["trace"]["mode"], "rules")
+        self.assertFalse(body["grounded"])                              # no location or needs: just the plan text
         self.assertEqual(post("/api/followup", {"question": "?"})[0], 400)
+
+
+class TravelModeApiTests(unittest.TestCase):
+    NEEDS = [{"item_id": "insulin", "priority": 1, "qty": 1, "label": "insulin"},
+             {"item_id": "diapers", "priority": 2, "qty": 1, "label": "diapers"}]
+
+    def setUp(self):
+        store.set_store(store.LocalReportStore())
+        handler._hits.clear()
+        os.environ["AI_MODE"] = "off"
+
+    def test_every_stage_defaults_to_driving_and_accepts_walking(self):
+        for path, body in (("/api/search", {"needs": self.NEEDS}), ("/api/alternatives", {"needs": self.NEEDS}),
+                           ("/api/brief", {"intent": {"needs": self.NEEDS}})):
+            status, drive = post(path, {**DOWNTOWN, **body})
+            status_w, walk = post(path, {**DOWNTOWN, **body, "mode": "walking"})
+            self.assertEqual((status, status_w), (200, 200), path)
+            self.assertEqual((drive["mode"], walk["mode"]), ("driving", "walking"), path)
+
+    def test_walking_search_reports_the_walking_range_and_times(self):
+        _, drive = post("/api/search", {**DOWNTOWN, "needs": self.NEEDS})
+        _, walk = post("/api/search", {**DOWNTOWN, "needs": self.NEEDS, "mode": "walking"})
+        self.assertEqual((drive["meta"]["radius_km"], walk["meta"]["radius_km"]), (8, 3.0))
+        d_eta = min(s["eta_min"] for s in drive["results"][0]["stores"])
+        w_eta = min(s["eta_min"] for s in walk["results"][0]["stores"])
+        self.assertGreater(w_eta, d_eta)
+
+    def test_walking_brief_is_a_walking_plan_with_a_walking_briefing(self):
+        status, b = post("/api/brief", {**DOWNTOWN, "intent": {"needs": self.NEEDS}, "mode": "walking"})
+        self.assertEqual((status, b["plan"]["mode"], b["plan"]["route"]["mode"]), (200, "walking", "walking"))
+        self.assertEqual((b["trace"]["lane"], b["trace"]["agent"]), ("walking", "brief"))
+        self.assertIn("on foot", b["plan_text"])
+        self.assertIn("on foot", b["brief"]["headline"] + b["brief"]["summary"])
+
+    def test_bad_modes_are_refused_on_every_endpoint(self):
+        for path in ("/api/search", "/api/alternatives", "/api/brief", "/api/route", "/api/followup", "/api/plan"):
+            for bad in ("flying", ["walking"], 7, {"a": 1}):
+                body = {**DOWNTOWN, "needs": self.NEEDS, "intent": {"needs": self.NEEDS}, "question": "Is it open?",
+                        "text": "water", "points": [{"lat": 37.3, "lng": -121.9}, {"lat": 37.31, "lng": -121.9}], "mode": bad}
+                self.assertEqual(post(path, body)[0], 400, (path, bad))
+
+    def test_meta_tells_the_browser_what_it_can_ask_for(self):
+        status, _, payload = call("GET", "/api/meta")
+        meta = json.loads(payload)
+        self.assertEqual(meta["travel"], {"modes": ["driving", "walking"], "walk_max_km": 3.0})
+        self.assertEqual(set(meta["ai"]["agents"]), {"understand", "alternatives", "brief", "followup"})
+
+    def test_both_lanes_in_one_call(self):
+        status, out = post("/api/plan", {**DOWNTOWN, "text": "I need insulin and diapers", "modes": ["walking", "driving"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(set(out["lanes"]), {"driving", "walking"})
+        self.assertEqual(out["plan"]["mode"], "walking")              # the original keys follow the first mode listed
+        self.assertEqual(out["lanes"]["walking"]["plan"]["mode"], "walking")
+        self.assertEqual(out["lanes"]["driving"]["plan"]["mode"], "driving")
+        brief_traces = [t for t in out["traces"] if t["stage"] == "brief"]
+        self.assertEqual(sorted(t["lane"] for t in brief_traces), ["driving", "walking"])
+        self.assertEqual(out["traces"][0]["stage"], "understand")
+        status, single = post("/api/plan", {**DOWNTOWN, "text": "I need insulin and diapers"})
+        self.assertNotIn("lanes", single)                             # the original response shape, untouched
+        for bad in ([], ["driving", "walking", "driving", "walking"], "walking", ["x"]):
+            self.assertEqual(post("/api/plan", {**DOWNTOWN, "text": "water", "modes": bad})[0], 400, bad)
+
+    def test_store_hours_are_supplied_for_maps_and_saved_plans(self):
+        import engine
+        status, out = post('/api/plan', {**DOWNTOWN, 'text': 'I need water and AA batteries'})
+        self.assertEqual(status, 200)
+        for stop in out['plan']['route']['stops']:
+            expected = engine.STORE_BY_ID[stop['store']['id']]
+            self.assertEqual(stop['store']['hours'], expected['hours'])
+            self.assertEqual(stop['store']['status'], expected['status'])
+        for result in out['plan']['results']:
+            for match in result['stores']:
+                self.assertEqual(match['hours'], engine.STORE_BY_ID[match['id']]['hours'])
+        meta = json.loads(call('GET', '/api/meta')[2])
+        self.assertEqual(len(meta['store_hours']), len(engine.STORES))
+        self.assertFalse(any('inv' in entry for entry in meta['store_hours']))
+
+    def test_the_assistant_is_grounded_in_both_plans_built_on_the_server(self):
+        body = {**DOWNTOWN, "question": "Should I walk or drive?", "intent": {"needs": self.NEEDS}, "mode": "walking",
+                "plan_text": "text the browser could have changed"}
+        status, out = post("/api/followup", body)
+        self.assertEqual(status, 200)
+        self.assertTrue(out["grounded"])
+        self.assertEqual(out["trace"]["mode"], "rules")               # no model in tests, so the rules answer
+        self.assertIn("Driving:", out["answer"])
+        self.assertIn("Walking (shown):", out["answer"])
+
+    def test_the_assistant_sees_the_plans_the_engine_builds_not_whatever_the_browser_sends(self):
+        seen = []
+        real = ai.assistant
+
+        def spy(question, situation=None, plan_text=""):
+            seen.append(situation)
+            return real(question, situation, plan_text)
+
+        evil = {"diapers": [{"for_item": "insulin", "options": [{"item_id": "glucose_tabs"}]}]}   # not a list of lanes
+        with unittest.mock.patch.object(ai, "assistant", spy):
+            post("/api/followup", {**DOWNTOWN, "question": "What can I do?", "intent": {"needs": self.NEEDS},
+                                   "alternatives": evil})
+        (situation,) = seen
+        self.assertEqual(situation["selected_mode"], "driving")
+        self.assertEqual(set(situation["plans"]), {"driving", "walking"})
+        self.assertEqual(situation["plans"]["walking"]["travel_mode"], "walking")
+        self.assertEqual(situation["plans"]["driving"]["search_radius_km"], 8)
+        self.assertEqual(situation["plans"]["walking"]["search_radius_km"], 3.0)
+        self.assertEqual([n["item"] for n in situation["needs"]], ["Insulin (prescription)", "Diapers"])
+        self.assertEqual(situation["local_time"], "10:00 AM")
 
 
 if __name__ == "__main__":
