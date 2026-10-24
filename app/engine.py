@@ -129,6 +129,7 @@ def _store_view(s, dist_km, eta, until, q, age, source, qty_wanted):
     conf = confidence(age)
     return {
         "id": s["id"], "name": s["name"], "type": s["type"], "hood": s["hood"],
+        "kind": s.get("kind", "Store"), "free": bool(s.get("free")),
         "lat": s["lat"], "lng": s["lng"],
         "dist_km": round(dist_km, 1), "eta_min": eta,
         "open_note": until, "store_note": s["note"] if s["status"] == "limited" else "",
@@ -445,6 +446,7 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4, mode=DEFAULT_MOD
         stops.append({
             "order": idx,
             "store": {"id": sid, "name": s["name"], "type": s["type"], "hood": s["hood"],
+                      "kind": s.get("kind", "Store"), "free": bool(s.get("free")),
                       "lat": s["lat"], "lng": s["lng"],
                       "store_note": s["note"] if s["status"] == "limited" else ""},
             "leg_km": round(leg["km"], 1), "leg_min": leg["min"], "arrive": fmt_clock(leg["arrive"]),

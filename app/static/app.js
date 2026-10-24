@@ -417,9 +417,16 @@
 
   function storeLine(s, mode) {
     const f = freshness(s);
-    return `<div class="store"><strong>${esc(s.name)}</strong>
+    return `<div class="store"><strong>${esc(s.name)}</strong>${kindBadge(s)}
       <div class="facts"><span>${fmtMin(s.eta_min)} ${MODES[mode || 'driving'].verb}</span><span>${fmtMi(s.dist_km)}</span>${s.open_note ? `<span>${esc(s.open_note)}</span>` : ''}
       <span class="${f.cls}">${esc(f.text)}</span>${s.low ? '<span class="warn">Low stock</span>' : ''}${s.store_note ? `<span class="warn">${esc(s.store_note)}</span>` : ''}</div></div>`;
+  }
+
+  // A small badge naming the kind of place. Free community resources (food banks, shelters,
+  // distribution and cooling centers) are highlighted so they stand out from paid stores.
+  function kindBadge(s) {
+    if (!s || !s.kind || (s.kind === 'Store' && !s.free)) return '';
+    return ` <span class="place-kind${s.free ? ' free' : ''}">${esc(s.kind)}</span>`;
   }
 
   function gapText(r, mode, radiusKm) {
@@ -484,7 +491,7 @@
         <div id="mapSlot" class="map-slot"></div>
         <ol class="route"><li class="origin"><span class="node" aria-hidden="true"></span><div class="origin-text"><b>You are here</b><small>${esc(state.originLabel || '')}${state.originLabel ? ', ' : ''}leave about ${esc(plan.route.leaves)}</small></div></li>
         ${stops.map((s) => `<li class="stop"><span class="node" aria-hidden="true">${s.order}</span><div>
-          <h3>${esc(s.store.name)}</h3>
+          <h3>${esc(s.store.name)}</h3>${kindBadge(s.store)}
           <div class="where-line"><span><b>${fmtMin(s.leg_min)}</b> ${MODES[modeOf(plan)].verb}, ${fmtMi(s.leg_km)}</span><span>Arrive about ${esc(s.arrive)}</span>${s.open_note ? `<span>${esc(s.open_note)}</span>` : ''}${s.store.store_note ? `<span class="warn">${esc(s.store.store_note)}</span>` : ''}</div>
           ${says[s.order] ? `<p class="say">${esc(says[s.order])}</p>` : ''}
           <ul class="tickets">${s.items.map(ticket).join('')}</ul>
