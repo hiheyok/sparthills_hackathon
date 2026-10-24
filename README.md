@@ -83,15 +83,17 @@ bash scripts/destroy.sh               # remove everything when you are done
 
 `deploy.sh` builds a zip of `app/`, uploads it to a private S3 bucket, and runs CloudFormation (`infra/template.yaml`). The stack creates one Lambda function (Python 3.12, arm64) behind an API Gateway HTTP API, a DynamoDB table with a 6-hour TTL for neighbor reports, a log group with 14-day retention, and a least-privilege IAM role.
 
-Optional settings (environment variables for `deploy.sh`): `AWS_REGION`, `STACK_NAME`, `BEDROCK_REGION`, `BEDROCK_MODEL_IDS` (comma separated), `GUARDRAIL_ID`.
+Optional settings (environment variables for `deploy.sh`): `AWS_REGION`, `STACK_NAME`, `BEDROCK_REGION`, `BEDROCK_MODEL_IDS` (comma separated), `GUARDRAIL_ID`, `GOOGLE_MAPS_API_KEY`, `GOOGLE_MAPS_MAP_ID`, `INVENTORY_SNAPSHOT_TS`.
+
+The browser uses Google Maps when `GOOGLE_MAPS_API_KEY` is configured, and falls back to the bundled Leaflet library with OpenStreetMap tiles if the key is absent or Google Maps fails. For local use, put `GOOGLE_MAPS_API_KEY` and optionally `GOOGLE_MAPS_MAP_ID` in `.env.local`, or export them before starting the server. The Google Maps browser key is sent to the page; restrict it to your website in Google Cloud. Map display is separate from the server's OSRM calls for driving and walking route geometry.
 
 Road routing can be tuned on the function with `ROAD_ROUTING=off` (never call a routing service, for walking or driving), `ROAD_ROUTING_URL` (point driving at your own OSRM-compatible server) or `ROAD_ROUTING_WALK_URL` (the same for walking; it must serve a foot profile).
 
 ### One AI agent per task
 
-Each task has its own agent with its own prompt, output size, temperature and time budget, and you can give it its own models. Set `BEDROCK_MODEL_IDS_<TASK>` on the function (comma separated, like `BEDROCK_MODEL_IDS`) for `UNDERSTAND`, `ALTERNATIVES`, `BRIEF` or `FOLLOWUP`, for example a smaller, faster model for the short answers of `FOLLOWUP`. A task with no setting uses `BEDROCK_MODEL_IDS`, then the defaults below. `/api/health` lists every agent and its models.
+Each task has its own agent with its own prompt, output size, temperature and time budget, and you can give it its own models. These are task-specific Converse calls orchestrated by Python and browser code; the app does not use the managed Amazon Bedrock Agents service. Set `BEDROCK_MODEL_IDS_<TASK>` on the function (comma separated, like `BEDROCK_MODEL_IDS`) for `UNDERSTAND`, `ALTERNATIVES`, `BRIEF` or `FOLLOWUP`, for example a smaller, faster model for the short answers of `FOLLOWUP`. A task with no setting uses `BEDROCK_MODEL_IDS`, then the defaults below. `/api/health` lists every agent and its models.
 
-The driving and walking plans are built at the same time, each by its own substitutes and briefing agents, so asking for both takes about as long as asking for one. In the browser the plan on screen is built step by step and the other one in the background, so switching is instant. The assistant reads your situation on the server, so it can answer as soon as your request is understood, before either plan is ready.
+After understanding the request once, the browser builds driving and walking plans concurrently, each with separate substitutes and briefing calls. The foreground plan shows progress through search, alternatives when needed, and briefing; the background plan searches inside its alternatives and briefing endpoints. Switching to a completed plan needs no new planning calls; a plan still building shows a loading state. A background failure leaves the foreground plan available and offers a retry. A foreground failure clears both plans for that search and shows the main retry notice. The assistant reads your situation on the server, so it can answer as soon as your request is understood, before either plan is ready.
 
 ### Which models
 
@@ -115,10 +117,10 @@ The stack also allows the function role `bedrock:ApplyGuardrail` on that one gua
 | Rubric item | Where to see it |
 |---|---|
 | Real persona and need (20) | Maria above. Wildfire, insulin and a baby are the first example in the app. |
-| Working app (25) | Live URL after `deploy.sh`. Works offline for the last plan. 4 automated test files. |
+| Working app (25) | Live URL after `deploy.sh`. Saved plans work offline. Automated backend and browser regression suites. |
 | AWS AI use (20) | Four Bedrock stages (understand, alternatives, briefing, follow-up) via the Converse API, with a model fallback chain, optional Guardrails, and a trace panel ("Under the hood: what Bedrock did", folded away by default) that shows the model, time and tokens for each call. |
 | Understanding what you built (15) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): what is code, what is the model, and why. |
-| Polish (10) | Accessible, mobile first, installable, prints, no external CDN (only map tile images come from OpenStreetMap), checked at phone width. |
+| Polish (10) | Accessible, mobile first, installable, prints, bundled app scripts, fonts and Leaflet, checked at phone width. Google Maps loads externally when configured; the fallback loads OpenStreetMap tiles. |
 | Above and beyond (10) | Safety policy per item, stock freshness, open-on-arrival checks, urgency-weighted routing, neighbor reports with expiry, graceful fallback, one-command deploy and teardown. |
 
 The video script is in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
@@ -149,10 +151,10 @@ app/
   ai.py          Amazon Bedrock stages, validation, model fallback, rules fallback
   roads.py       Driving and walking routes for the map (public OSRM services, fail soft)
   road_transport.py  HTTPS fetch, with a native Windows fallback for connection failures
-  store.py       Neighbor reports (DynamoDB, or in memory locally)
+  store.py       Neighbor reports (DynamoDB on AWS; memory + JSON file by default locally)
   geo.py         Distance, and travel time for driving and walking
   data/          catalog.json, stores.json, places.json (generated)
-  static/        The web app: index.html, app.js, styles.css, service worker, map, fonts
+  static/        The web app, service worker, map adapters (maps.js), bundled Leaflet and fonts
 infra/template.yaml   CloudFormation stack
 scripts/              deploy.sh, destroy.sh, smoke.py, gen_data.py
 tests/                Engine, AI, handler and AWS request-shape tests
@@ -188,7 +190,7 @@ GitHub Actions runs the backend and browser regressions on Linux and Windows. Th
 | Every model fails but the first few worked before | Throttling. Failures are remembered for 20 seconds, then retried. |
 | Error about an inference profile or `us.` model | Your account may block cross-region profiles. The chain already falls through to in-region Nova models. Or set `BEDROCK_MODEL_IDS` to a model you can use. |
 | `no credentials` in the trace | Export credentials (local) or check the Lambda role (deployed). The app answers with rules in the meantime. |
-| Request takes too long | The Lambda limit is 29 seconds (the API Gateway limit). Each stage may use up to 24 seconds of model time, never more than the request has left minus a 3 second reserve. Each call gets a timeout that fits in the time left, the SDK never retries on its own, and no call or JSON repair starts with under 5 seconds left. Then the app falls back to rules. |
+| Request takes too long | Lambda is configured with a 29-second timeout and the API Gateway integration with 30 seconds. Each stage may use up to 24 seconds of model time, never more than the request has left minus a 3 second reserve. Each call gets a timeout that fits in the time left, the SDK never retries on its own, and no call or JSON repair starts with under 5 seconds left. Then the app falls back to rules. |
 | The map line is dashed and straight | The routing service could not be reached (the function may have no internet, or the free service is busy). The dashed line connects stops; it is not a driving route. Click **Retry road route** or open **Turn-by-turn in Google Maps**. Transient routing failures are retried once automatically. |
 | Map background blank | Map tiles come from OpenStreetMap and need a network. They also need the browser to send a Referer, so the app sets `Referrer-Policy: strict-origin-when-cross-origin`. A privacy extension that strips Referer will blank the tiles. The app shows a notice, and the route, stops and list still work. |
 | `deploy.sh` fails on the bucket | Set `ARTIFACT_BUCKET` to a bucket you own, or check your credentials with `aws sts get-caller-identity`. |

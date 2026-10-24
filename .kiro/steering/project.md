@@ -12,7 +12,7 @@ SupplyLine helps a household find open stores with stock during a disaster, and 
 6. **No secrets and no personal data in code, logs or the front end.**
 7. **Demo data is fictional.** Never describe it as real inventory.
 
-8. **The browser only talks to our own function** (plus OpenStreetMap map tiles). Third-party services such as road routing (`app/roads.py`) are called from the Lambda, never directly from the page, and must fail soft: the app keeps working without them. Keep the CSP `connect-src 'self'`.
+8. **Planning API calls go to our own function.** Road routing (`app/roads.py`) is called from the Lambda and must fail soft: the app keeps working without it. Map display is separate: the browser may load Google Maps when configured, with bundled Leaflet and OpenStreetMap tiles as fallback. Keep the CSP limited to our origin and the map-provider domains needed by `app/static/maps.js`.
 
 ## Layout
 
@@ -31,7 +31,7 @@ SupplyLine helps a household find open stores with stock during a disaster, and 
 ## Style
 
 * Python 3.12, standard library first. boto3 is provided by the Lambda runtime, so do not bundle it.
-* Front end: no framework, no CDN, no inline scripts (the CSP blocks them). Escape everything inserted into the page.
+* Front end: no framework; bundle app scripts, Leaflet and fonts. The optional Google Maps SDK loads from Google. Keep application scripts external and preserve the handler's CSP nonce support for the map SDK. Escape everything inserted into the page.
 * Plain language in the UI, readable by a stressed person on a phone.
 * Add a test for every bug that is fixed, especially anything touching the safety policy.
 
