@@ -8,6 +8,8 @@ explaining the plan. The AI can only pick from ids this engine knows about,
 and everything it recommends is re-checked here for real stock.
 """
 import json
+import os
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from itertools import permutations
@@ -27,6 +29,21 @@ CATALOG = {c["id"]: c for c in CATALOG_LIST}
 STORES = _load("stores.json")
 STORE_BY_ID = {s["id"]: s for s in STORES}
 PLACES = _load("places.json")
+
+def _snapshot_ts():
+    try:
+        return float(os.environ["INVENTORY_SNAPSHOT_TS"])
+    except (KeyError, ValueError):
+        return time.time()
+
+
+# The demo inventory gives each record's age in minutes "as of the snapshot". The snapshot is
+# pinned to one instant (INVENTORY_SNAPSHOT_TS, which deploy.sh sets so every Lambda container
+# agrees, else this process's start), so a record has one stable observation time:
+# SNAPSHOT_TS - age. Neighbor reports are compared with that time and the age shown to people
+# is measured from it. The snapshot gets older as time passes, instead of looking freshly
+# observed on every search. A real inventory feed would give each record its own "ts".
+SNAPSHOT_TS = _snapshot_ts()
 
 CLOSE_BUFFER_MIN = 15      # arrive at least this long before closing
 FRESH_MIN = 60             # inventory checked within an hour
@@ -76,22 +93,27 @@ def _reported_closed(store_id, reports):
     return bool(rep and rep["status"] == "closed")
 
 
+def _observed_ts(rec):
+    """When an inventory record was observed (unix seconds)."""
+    return rec["ts"] if "ts" in rec else SNAPSHOT_TS - rec["age"] * 60.0
+
+
 def stock_of(store, item_id, reports, now_ts):
     """(quantity, age_minutes, source) or None if the store is not known to carry it.
-    A newer neighbor report beats the inventory snapshot."""
+    A neighbor report beats the inventory record while it is newer than the record's
+    observation time, so it stays authoritative until it expires (store.REPORT_TTL_S)
+    or the store's inventory is genuinely observed again."""
     rec = store["inv"].get(item_id)
-    q = age = None
+    q = seen = None
     source = "snapshot"
     if rec:
-        q, age = rec["q"], rec["age"]
+        q, seen = rec["q"], _observed_ts(rec)
     rep = reports.get((store["id"], item_id))
-    if rep and rep["status"] in STATUS_TO_Q:
-        rep_age = max(0.0, (now_ts - rep["ts"]) / 60.0)
-        if rec is None or rep_age <= age:
-            q, age, source = STATUS_TO_Q[rep["status"]], rep_age, "community"
+    if rep and rep["status"] in STATUS_TO_Q and (rec is None or rep["ts"] >= seen):
+        q, seen, source = STATUS_TO_Q[rep["status"]], rep["ts"], "community"
     if q is None:
         return None
-    return q, int(age), source
+    return q, int(max(0.0, (now_ts - seen) / 60.0)), source
 
 
 def confidence(age_min):

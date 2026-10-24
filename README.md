@@ -102,6 +102,7 @@ The video script is in [docs/DEMO_SCRIPT.md](docs/DEMO_SCRIPT.md).
 ## Honest limits
 
 * **The data is fictional.** 53 invented stores in 16 San José neighborhoods and made-up stock, generated with a fixed seed (`scripts/gen_data.py`). It shows how the app behaves in a shortage. It is not a real inventory feed.
+* **The demo stock ages in real time.** Each record's "checked N minutes ago" is counted from one snapshot time (the deploy time on AWS, the server start locally), so "fresh" stock turns into "call ahead" after a few hours. A neighbor report stays in force for its 6 hours, because it is compared with that same snapshot time. Redeploy to refresh the demo data.
 * **Drive times in the plan are estimates** (straight-line distance, a detour factor and a slow fixed speed). There is no live traffic and no road closures.
 * **The road route on the map comes from a free public service.** It uses the public OSRM demo server with OpenStreetMap data. That service has no uptime promise and no live traffic, so if it is down the map shows a straight dashed line and says so. Its time can differ from the plan's estimate, which is deliberately slower and includes shopping time. Your function (not the browser) calls it, so only the coordinates of your location and the stops are sent, never your IP address. For production use Amazon Location Service.
 * **The rules fallback is much weaker than the model.** It matches keywords. It is there so the app is never dead, not to replace the model.

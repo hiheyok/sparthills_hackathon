@@ -28,6 +28,15 @@ Parameters:
   GuardrailVersion:
     Type: String
     Default: DRAFT
+  InventorySnapshotTs:
+    Type: String
+    Default: ''
+    AllowedPattern: '^[0-9]*$'
+    ConstraintDescription: Use Unix time in whole seconds, or leave empty.
+    Description: >-
+      Unix time (seconds) when the demo inventory counts as observed. scripts/deploy.sh sets it to
+      the deploy time so every Lambda container agrees on it, which keeps neighbor reports
+      authoritative across cold starts. Empty means each container uses its own start time.
   ThrottleRatePerSecond:
     Type: Number
     Default: 25
@@ -123,6 +132,7 @@ Resources:
           BEDROCK_REGION: !Ref BedrockRegion
           BEDROCK_MODEL_IDS: !Ref BedrockModelIds
           REPORTS_TABLE: !Ref ReportsTable
+          INVENTORY_SNAPSHOT_TS: !Ref InventorySnapshotTs
           GUARDRAIL_ID: !If [HasGuardrail, !Ref GuardrailId, '']
           GUARDRAIL_VERSION: !Ref GuardrailVersion
 

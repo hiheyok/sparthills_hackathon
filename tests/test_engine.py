@@ -7,6 +7,7 @@ import unittest.mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
 import engine as e  # noqa: E402
+import store as report_store  # noqa: E402
 
 DOWNTOWN = (37.3382, -121.8863)
 ALMADEN = (37.2260, -121.8640)
@@ -84,6 +85,37 @@ class EngineTests(unittest.TestCase):
         stale = {(sid, "water_bottled"): {"status": "in_stock", "ts": self.now - (age + 600) * 60}}
         res = e.stock_of(e.STORE_BY_ID[sid], "water_bottled", stale, self.now)
         self.assertEqual(res[2], "snapshot")
+
+    def test_unexpired_report_stays_authoritative_while_time_passes(self):
+        base = 1_700_000_000
+        with unittest.mock.patch.object(e, "SNAPSHOT_TS", float(base)):
+            sid = next(s["id"] for s in e.STORES if s["inv"].get("insulin", {}).get("q", 0) > 0)
+            shop = e.STORE_BY_ID[sid]
+            record = dict(shop["inv"]["insulin"])
+            reports = report_store.LocalReportStore()
+            reports.put(sid, "insulin", "out", ts=base)           # newer than the record, which is `age` minutes older
+            for minutes in (0, 48, 5 * 60 + 59):                  # the inventory record never changes
+                now = base + minutes * 60
+                self.assertEqual(e.stock_of(shop, "insulin", reports.all_recent(now), now), (0, minutes, "community"), minutes)
+            now = base + report_store.REPORT_TTL_S + 60            # expired: the unchanged snapshot is back, and it has aged
+            self.assertEqual(e.stock_of(shop, "insulin", reports.all_recent(now), now),
+                             (record["q"], record["age"] + report_store.REPORT_TTL_S // 60 + 1, "snapshot"))
+
+    def test_snapshot_age_is_measured_from_one_stable_time(self):
+        base = 1_700_000_000
+        with unittest.mock.patch.object(e, "SNAPSHOT_TS", float(base)):
+            shop = {"id": "x", "inv": {"a": {"q": 5, "age": 30}}}
+            self.assertEqual(e.stock_of(shop, "a", {}, base)[1], 30)
+            self.assertEqual(e.stock_of(shop, "a", {}, base + 600)[1], 40)     # ten minutes later it is ten minutes older
+            self.assertEqual(e.stock_of(shop, "a", {}, base - 600)[1], 20)
+
+    def test_a_newer_inventory_observation_beats_an_older_report(self):
+        base = 1_700_000_000
+        shop = {"id": "x", "inv": {"a": {"q": 9, "age": 0, "ts": base + 100}}}
+        older = {("x", "a"): {"status": "out", "ts": base + 50}}
+        newer = {("x", "a"): {"status": "out", "ts": base + 150}}
+        self.assertEqual(e.stock_of(shop, "a", older, base + 200), (9, 1, "snapshot"))
+        self.assertEqual(e.stock_of(shop, "a", newer, base + 200), (0, 0, "community"))
 
     def test_store_closed_report(self):
         top = self.search("insulin")["stores"][0]["id"]
