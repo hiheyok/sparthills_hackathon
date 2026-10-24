@@ -36,14 +36,9 @@ CONTENT_TYPES = {
     ".woff2": "font/woff2", ".png": "image/png", ".txt": "text/plain; charset=utf-8",
 }
 BINARY = {".woff2", ".png"}
-CSP = ("default-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org "
-       "https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com; "
-       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-       "script-src 'self' https://maps.googleapis.com https://maps.gstatic.com; "
-       "font-src 'self' https://fonts.gstatic.com; "
-       "connect-src 'self' https://*.googleapis.com https://*.google.com https://*.gstatic.com data: blob:; "
-       "frame-src https://*.google.com; manifest-src 'self'; worker-src 'self' blob:; "
-       "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+CSP = ("default-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org; "
+       "style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'self'; "
+       "manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff", "Referrer-Policy": "strict-origin-when-cross-origin",  # OpenStreetMap blocks tile requests that carry no Referer
     "Permissions-Policy": "geolocation=(self), camera=(), microphone=()",
@@ -171,9 +166,6 @@ def api_meta(_d):
         "catalog": [{"id": c["id"], "name": c["name"], "category": c["category"]} for c in CATALOG_LIST],
         "ai": ai.status(),
         "travel": {"modes": list(MODES), "walk_max_km": WALK_MAX_KM},
-        # Maps JavaScript keys are browser credentials; restrict them by website in Google Cloud.
-        "maps": {"apiKey": os.environ.get("GOOGLE_MAPS_API_KEY", "").strip(),
-                 "mapId": os.environ.get("GOOGLE_MAPS_MAP_ID", "DEMO_MAP_ID").strip() or "DEMO_MAP_ID"},
         "data": {"stores": len(STORES), "demo": True,
                  "note": "Stores, addresses and inventory are fictional demo data."},
     }
