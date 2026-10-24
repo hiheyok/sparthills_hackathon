@@ -642,8 +642,12 @@ FALLBACK_SUBS = {
     "first_aid_kit": [_sub("bandages", "partial", "Covers cuts and scrapes only."),
                       _sub("antiseptic", "partial", "Cleans cuts and scrapes only.")],
     "antiseptic": [_sub("first_aid_kit", "partial", "Most kits include antiseptic wipes.")],
-    "baby_formula_powder": [_sub("baby_formula_rtf", "strong", "The same kind of formula, ready to feed, with no water needed.")],
-    "baby_formula_rtf": [_sub("baby_formula_powder", "strong", "The same kind of formula. It needs clean, safe water to mix.")],
+    "propane_1lb": [_sub("food_meals", "workaround", "Ready-to-eat meals avoid the need to use the propane stove.",
+                         "Choose meals marked ready to eat.", "This does not provide fuel for your stove.")],
+    "baby_formula_powder": [_sub("baby_formula_rtf", "partial", "Ready-to-feed formula needs no water to mix.",
+                                caution="Ask the pediatrician before switching types; confirm package sizes and the amount needed.")],
+    "baby_formula_rtf": [_sub("baby_formula_powder", "partial", "Powdered formula needs clean, safe water to mix.",
+                             caution="Ask the pediatrician before switching types; confirm package sizes and the amount needed.")],
 }
 
 
@@ -687,6 +691,7 @@ Safety first: if situation.urgent_safety.flag is true, the FIRST safety note mus
 If an item was swapped for an alternative, say so in that stop's text and what to check (ask the pharmacist, confirm the stove type, and so on).
 If items could not be found, use "if_stuck" for what to do next (call ahead, ask staff for alternatives, dial 211), at most 3 short bullets.
 If PLAN.partly_available lists an item, the route cannot supply the full amount: say how many are still missing in the summary, and never say everything is covered. Use quantity_here for how many to buy at that stop.
+If PLAN.quantity_unconfirmed lists an item, preserve the original requested quantity and tell the person to confirm equivalent package amounts with the store. Those substitute suggestions are not in the route and do not cover the need. Never invent a quantity conversion.
 
 Respond with ONE JSON object and nothing else:
 {"headline":"max 90 characters: what to do first","summary":"2 sentences at most","steps":[{"stop":1,"say":"1-2 sentences: what to get here and anything to ask or check"}],"safety_notes":["..."],"if_stuck":["..."]}
@@ -707,7 +712,10 @@ def plan_for_prompt(plan, intent):
         "situation": {"disaster": intent.get("disaster"), "household": intent.get("household"),
                       "urgent_safety": intent.get("urgent_safety")},
         "stops": stops,
-        "not_found_nearby": [{"item": u["name"], "priority": u["priority"]} for u in plan["unresolved"]],
+        "not_found_nearby": [{"item": u["name"], "priority": u["priority"]} for u in plan["unresolved"]
+                             if u.get("reason") != "quantity_unverified"],
+        "quantity_unconfirmed": [{"item": u["name"], "requested": u["qty"], "note": u["quantity_note"]}
+                                 for u in plan["unresolved"] if u.get("reason") == "quantity_unverified"],
         "partly_available": [{"item": s["name"], "needed": s["qty"], "found": s["found"], "still_missing": s["missing"],
                               "priority": s["priority"]} for s in plan.get("shortfalls", [])],
         "no_substitute_policy": [a["for_name"] for a in plan["alternatives"] if a["policy"] == "none"],
@@ -748,14 +756,20 @@ GENERIC_SAFETY = {
 
 def fallback_brief(plan, intent):
     stops = plan["route"]["stops"]
+    checks = [u["quantity_note"] for u in plan["unresolved"] if u.get("reason") == "quantity_unverified"]
+    missing = [u for u in plan["unresolved"] if u.get("reason") != "quantity_unverified"]
     if stops:
         first = stops[0]
         headline = f"Start at {first['store']['name']}, about {first['leg_min']} minutes away."
         short = [f"{s['name'].lower()} ({s['found']} of {s['qty']})" for s in plan.get("shortfalls", [])]
-        problems = ((f"{len(plan['unresolved'])} item(s) could not be found nearby. " if plan["unresolved"] else "")
-                    + ("Not enough in stock for the full amount: " + ", ".join(short) + "." if short else ""))
+        problems = ((f"{len(missing)} item(s) could not be found nearby. " if missing else "")
+                    + ("Not enough in stock for the full amount: " + ", ".join(short) + ". " if short else "")
+                    + " ".join(checks))
         summary = (f"{len(stops)} stop{'s' if len(stops) != 1 else ''}, about {plan['route']['total_min']} minutes in all. "
                    + (problems.strip() or "Everything on your list is covered."))
+    elif checks:
+        headline = "Confirm substitute quantities before shopping."
+        summary = " ".join(checks) + (f" {len(missing)} other item(s) could not be found nearby." if missing else "")
     else:
         headline = "No open store near you has these items right now."
         summary = "Try a wider search area, or see the alternatives below."

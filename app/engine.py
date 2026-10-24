@@ -224,6 +224,7 @@ def build_plan(needs, alternatives, lat, lng, radius_km, now_min, reports, now_t
     results = search(needs, lat, lng, radius_km, now_min, reports, now_ts)
     alt_by_item = {a["for_item"]: a for a in (alternatives or [])}
     chosen, alts_out = [], []
+    quantity_checks = {}
 
     for r in results:
         key = r["item_id"]
@@ -261,7 +262,15 @@ def build_plan(needs, alternatives, lat, lng, radius_km, now_min, reports, now_t
             entry["verdict"] = "no_safe_substitute"
         elif entry["options"]:
             entry["verdict"] = "substitutes_available"
-        if picked:
+        if picked and r["qty"] > 1:
+            # Catalog units have no package sizes or conversion ratios. Four cans
+            # of powder do not imply one (or four) bottles of ready-to-feed formula.
+            # Keep the options as suggestions, but do not promise quantity coverage.
+            note = (f"You requested {r['qty']} units of {r['name']}. Confirm package sizes and the equivalent "
+                    "amount with the store before buying a substitute; this need is not covered by the route.")
+            entry.update({"qty_requested": r["qty"], "quantity_note": note})
+            quantity_checks[key] = note
+        elif picked:
             chosen.append({"key": key, "item_id": picked["item_id"], "name": picked["name"],
                            "label": r["label"], "priority": r["priority"], "qty": 1, "is_alt": True,
                            "replaces": key, "stores": picked["all_stores"]})
@@ -273,8 +282,10 @@ def build_plan(needs, alternatives, lat, lng, radius_km, now_min, reports, now_t
     shortfalls = route.pop("shortfalls")
     placed = {it["key"] for stop in route["stops"] for it in stop["items"]}
     unresolved = [{"item_id": r["item_id"], "name": r["name"], "label": r["label"],
-                   "priority": r["priority"],
-                   "reason": "no_stock" if r["item_id"] not in {c["key"] for c in chosen} else "not_in_route"}
+                   "priority": r["priority"], "qty": r["qty"],
+                   "reason": ("quantity_unverified" if r["item_id"] in quantity_checks else
+                              "no_stock" if r["item_id"] not in {c["key"] for c in chosen} else "not_in_route"),
+                   "quantity_note": quantity_checks.get(r["item_id"], "")}
                   for r in results if r["item_id"] not in placed]
     summary = {
         "needs": len(results), "in_route": len(placed),
@@ -451,7 +462,10 @@ def render_plan_text(plan, brief=None, urgent=False):
         lines.append("%d. %s, %d min, %s km, arrive %s" % (stop["order"], st["name"], stop["leg_min"], stop["leg_km"], stop["arrive"]))
         lines.append("   Get: " + names)
     for u in plan["unresolved"]:
-        lines.append("Not found nearby: " + u["name"])
+        if u.get("reason") == "quantity_unverified":
+            lines.append("Quantity not confirmed: " + u["quantity_note"])
+        else:
+            lines.append("Not found nearby: " + u["name"])
     for s in plan.get("shortfalls", []):
         lines.append("Not enough in stock: %s, found %d of %d" % (s["name"], s["found"], s["qty"]))
     for a in plan["alternatives"]:

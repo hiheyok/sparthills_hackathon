@@ -200,6 +200,50 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(plan["summary"]["swapped"], 1)
         self.assertEqual(plan["alternatives"][0]["options"][0]["status"], "found")
 
+    def test_multi_unit_substitutes_keep_the_original_quantity_unresolved(self):
+        alts = [{"for_item": "baby_formula_powder", "options": [
+            {"item_id": "baby_formula_rtf", "fit": "strong", "qty": 1, "quantity_verified": True}]}]
+        for qty in (4, 99):
+            with self.subTest(qty=qty):
+                plan = e.build_plan([need("baby_formula_powder", 1, qty)], alts, *DOWNTOWN, 8, MORNING, {}, self.now)
+                self.assertEqual(plan["route"]["stops"], [])
+                self.assertEqual((plan["summary"]["covered"], plan["summary"]["unresolved"]), (0, 1))
+                unresolved, = plan["unresolved"]
+                self.assertEqual((unresolved["item_id"], unresolved["qty"], unresolved["reason"]),
+                                 ("baby_formula_powder", qty, "quantity_unverified"))
+                alt, = plan["alternatives"]
+                self.assertEqual(alt["qty_requested"], qty)
+                self.assertEqual([o["item_id"] for o in alt["options"]], ["baby_formula_rtf"])
+                self.assertIn("Confirm package sizes", alt["quantity_note"])
+                text = e.render_plan_text(plan)
+                self.assertIn("Quantity not confirmed:", text)
+                self.assertIn(f"You requested {qty} units", text)
+
+    def test_unstocked_substitute_is_not_presented_as_a_quantity_check(self):
+        reports = {(s["id"], "baby_formula_rtf"): {"status": "out", "ts": self.now} for s in e.STORES}
+        alts = [{"for_item": "baby_formula_powder", "options": [{"item_id": "baby_formula_rtf"}]}]
+        plan = e.build_plan([need("baby_formula_powder", 1, 4)], alts, *DOWNTOWN, 8, MORNING, reports, self.now)
+        self.assertEqual(plan["unresolved"][0]["reason"], "no_stock")
+        self.assertEqual(plan["alternatives"][0]["options"], [])
+
+    def test_incompatible_fuels_are_rejected_even_from_client_alternatives(self):
+        fuels = ("propane_1lb", "propane_20lb", "butane_canister", "canned_fuel", "charcoal")
+        for missing in fuels:
+            with self.subTest(missing=missing):
+                reports = {(s["id"], missing): {"status": "out", "ts": self.now} for s in e.STORES}
+                alts = [{"for_item": missing, "options": [{"item_id": other} for other in fuels if other != missing]}]
+                plan = e.build_plan([need(missing)], alts, *DOWNTOWN, 8, MORNING, reports, self.now)
+                self.assertEqual(plan["alternatives"][0]["options"], [])
+                self.assertEqual(plan["route"]["stops"], [])
+                self.assertEqual(plan["summary"]["unresolved"], 1)
+
+    def test_generated_catalog_preserves_fuel_compatibility_rules(self):
+        import runpy
+        from pathlib import Path
+        generated = runpy.run_path(str(Path(__file__).resolve().parent.parent / "scripts" / "gen_data.py"))["CAT"]
+        for item in ("propane_1lb", "propane_20lb", "butane_canister", "canned_fuel", "charcoal"):
+            self.assertEqual(generated[item]["safe_subs"], e.CATALOG[item]["safe_subs"], item)
+
     def test_policy_none_items_are_never_substituted(self):
         reports = {(s["id"], "insulin"): {"status": "out", "ts": self.now} for s in e.STORES if "insulin" in s["inv"]}
         alts = [{"for_item": "insulin", "verdict": "substitutes_available", "no_purchase_tips": [], "escalate": None,

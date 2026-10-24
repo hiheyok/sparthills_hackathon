@@ -395,6 +395,7 @@
         const st = a.stats || {};
         const sub = `${st.checked || 0} stores checked within ${fmtMi(state.radius)}` + (a.nearest_any ? `. Nearest with stock: ${a.nearest_any.name}, ${fmtMi(a.nearest_any.dist_km)} away.` : '. None have it in stock.');
         return `<article class="sign ${noSub ? 'no-sub' : ''}"><div class="sign-head"><h3>${esc(head)}</h3><p>${esc(sub)}</p></div><div class="sign-body">
+          ${a.quantity_note ? `<p class="caution"><b>Quantity not confirmed:</b> ${esc(a.quantity_note)}</p>` : ''}
           ${a.options.map((o) => `<div class="opt ${esc(o.fit)}"><h4>${esc(o.name)}<span class="fit">${esc(FIT_TEXT[o.fit] || '')}</span></h4>
             ${o.why ? `<p>${esc(o.why)}</p>` : ''}${o.how_to_use ? `<p>${esc(o.how_to_use)}</p>` : ''}
             ${o.caution ? `<p class="caution"><b>Check:</b> ${esc(o.caution)}</p>` : ''}

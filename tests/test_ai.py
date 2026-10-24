@@ -281,15 +281,17 @@ class AlternativesTests(Base):
         prompt = fake.calls[0]["messages"][0]["content"][0]["text"]
         self.assertIn('"allowed_substitutes": ["baby_formula_rtf"]', prompt)
 
-    def test_grill_tank_is_never_offered_for_a_camp_canister(self):
-        pool = {"propane_20lb": {"dist_km": 0.5}, "butane_canister": {"dist_km": 2.0}}
+    def test_model_cannot_offer_incompatible_fuel_for_a_camp_canister(self):
+        pool = {"propane_20lb": {"dist_km": 0.5}, "butane_canister": {"dist_km": 2.0},
+                "canned_fuel": {"dist_km": 1.0}, "food_meals": {"dist_km": 3.0}}
         reply = {"alternatives": [{"for_item": "propane_1lb", "options": [
             {"item_id": "propane_20lb", "fit": "strong", "why": "", "how_to_use": "", "caution": ""},
-            {"item_id": "butane_canister", "fit": "partial", "why": "", "how_to_use": "", "caution": ""}]}]}
+            {"item_id": "butane_canister", "fit": "partial", "why": "", "how_to_use": "", "caution": ""},
+            {"item_id": "canned_fuel", "fit": "partial"},
+            {"item_id": "food_meals", "fit": "workaround"}]}]}
         ai.set_client(FakeBedrock([reply]))
         alts, _ = ai.alternatives([{"item_id": "propane_1lb", "label": "propane", "priority": 2, "why": ""}], pool, {})
-        self.assertEqual([o["item_id"] for o in alts[0]["options"]], ["butane_canister"])
-        self.assertIn("butane stoves only", alts[0]["options"][0]["caution"])
+        self.assertEqual([o["item_id"] for o in alts[0]["options"]], ["food_meals"])
 
     def test_fallback_never_suggests_baby_food_for_formula(self):
         os.environ["AI_MODE"] = "off"
@@ -360,20 +362,21 @@ class AlternativesTests(Base):
         self.assertNotIn('"item_id": "insulin"', avail)
         self.assertIn('"item_id": "water_filter"', avail)
 
-    def test_fallback_prefers_tag_matches_and_keeps_cautions(self):
-        os.environ["AI_MODE"] = "off"
-        try:
-            ai.set_client(FakeBedrock([]))
-            pool = {k: {"dist_km": 2.0 + i} for i, k in enumerate(["butane_canister", "camp_stove_propane", "canned_fuel", "headlamp"])}
-            alts, trace = ai.alternatives([{"item_id": "propane_1lb", "label": "propane", "priority": 2, "why": ""}], pool, {})
-        finally:
-            os.environ["AI_MODE"] = "auto"
-        self.assertEqual(trace["mode"], "rules")
-        ids = [o["item_id"] for o in alts[0]["options"]]
-        self.assertIn("butane_canister", ids)
-        butane = next(o for o in alts[0]["options"] if o["item_id"] == "butane_canister")
-        self.assertIn("butane stoves only", butane["caution"])
-        self.assertNotIn("headlamp", ids)
+    def test_fallback_offers_a_cooking_workaround_without_incompatible_fuels(self):
+        pool = {k: {"dist_km": 2.0 + i} for i, k in enumerate(
+            ["butane_canister", "camp_stove_propane", "canned_fuel", "headlamp", "food_meals"])}
+        alt = self.rules_only("propane_1lb", pool)
+        self.assertEqual([(o["item_id"], o["fit"]) for o in alt["options"]], [("food_meals", "workaround")])
+        self.assertIn("does not provide fuel", alt["options"][0]["caution"])
+        del pool["food_meals"]
+        alt = self.rules_only("propane_1lb", pool)
+        self.assertEqual((alt["options"], alt["verdict"]), ([], "none_found"))
+
+    def test_fallback_does_not_swap_fuels_in_the_reverse_direction(self):
+        pool = {k: {"dist_km": 1.0} for k in ("propane_1lb", "propane_20lb", "butane_canister", "canned_fuel", "charcoal")}
+        for missing in ("butane_canister", "canned_fuel", "charcoal"):
+            with self.subTest(missing=missing):
+                self.assertEqual(self.rules_only(missing, pool)["options"], [])
 
 
 class BriefTests(Base):

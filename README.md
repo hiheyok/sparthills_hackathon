@@ -31,10 +31,12 @@ Every catalog item has a policy:
 | Policy | Meaning | Example |
 |---|---|---|
 | `free` | Any in-stock item with the same use is fine. | Bottled water for canned water |
-| `caution` | Only items on a hand-written allowlist, with a warning shown. The list can be empty. | 1 lb propane: butane canister, canned fuel, ready-to-eat food |
+| `caution` | Only items on a hand-written allowlist, with a warning shown. The list can be empty. | 1 lb propane: ready-to-eat food as a cooking workaround; no incompatible fuel swaps |
 | `none` | Never substituted. The app says who to call instead. | Insulin, prescriptions |
 
 The model's output is checked against these rules in code (`ai.py` and again in `engine.py`). The model cannot add an item that is not in the catalog, cannot suggest something out of stock, and cannot override the policy. The "safe to swap" verdict is worked out on the server, never trusted from the browser. A keyword safety net shows a **call 911** banner for things like gas smell or chest pain, even if the model misses it.
+
+The catalog has no package-size conversion data. When more than one unit is requested and only substitutes are available, the app keeps the requested amount unresolved and asks the user to confirm equivalent quantities with the store. It shows the options without automatically adding an unverified purchase to the route.
 
 ## Run it locally (about 60 seconds)
 

@@ -169,6 +169,44 @@ class HandlerTests(unittest.TestCase):
         self.assertIn("Not enough in stock", b["brief"]["summary"])
         self.assertIn("Not enough in stock", b["plan_text"])
 
+    def test_multi_unit_formula_substitute_stays_unresolved_through_both_stages(self):
+        for include_insulin in (False, True):
+            with self.subTest(include_insulin=include_insulin):
+                needs = [{"item_id": "baby_formula_powder", "priority": 1, "qty": 4}]
+                if include_insulin:
+                    needs.append({"item_id": "insulin", "priority": 1, "qty": 1})
+                intent = {"needs": needs}
+                status, a = post("/api/alternatives", {**DOWNTOWN, "intent": intent})
+                self.assertEqual(status, 200)
+                self.assertIn("You requested 4 units", a["alternatives"][0]["quantity_note"])
+                status, b = post("/api/brief", {**DOWNTOWN, "intent": intent, "alternatives": a["alternatives"]})
+                self.assertEqual(status, 200)
+                self.assertEqual((b["plan"]["summary"]["covered"], b["plan"]["summary"]["unresolved"]),
+                                 (int(include_insulin), 1))
+                self.assertFalse(any(i["is_alt"] for s in b["plan"]["route"]["stops"] for i in s["items"]))
+                self.assertIn("You requested 4 units", b["brief"]["summary"])
+                self.assertNotIn("Everything on your list is covered", b["brief"]["summary"])
+                self.assertIn("Quantity not confirmed:", b["plan_text"])
+                prompt = ai.plan_for_prompt(b["plan"], intent)
+                self.assertEqual(prompt["quantity_unconfirmed"][0]["requested"], 4)
+                self.assertEqual(prompt["not_found_nearby"], [])
+
+    def test_storm_example_never_pairs_a_propane_stove_with_butane(self):
+        text = "A storm took out our power three days ago. We need D batteries for our lantern and propane for the camp stove."
+        status, body = post("/api/plan", {**DOWNTOWN, "text": text})
+        self.assertEqual(status, 200)
+        items = [i for s in body["plan"]["route"]["stops"] for i in s["items"]]
+        self.assertIn("camp_stove_propane", [i["item_id"] for i in items])
+        self.assertEqual([i["item_id"] for i in items if i["replaces"] == "propane_1lb"], ["food_meals"])
+        self.assertNotIn("Butane canister", body["plan_text"])
+        import engine
+        for s in engine.STORES:
+            store.get_store().put(s["id"], "food_meals", "out")
+        status, body = post("/api/plan", {**DOWNTOWN, "text": text})
+        self.assertEqual(status, 200)
+        self.assertIn("propane_1lb", [u["item_id"] for u in body["plan"]["unresolved"]])
+        self.assertFalse(any(i["replaces"] == "propane_1lb" for s in body["plan"]["route"]["stops"] for i in s["items"]))
+
     def test_report_validation(self):
         bad = [{"store_id": "nope", "item_id": "insulin", "status": "out"},
                {"store_id": "s01", "item_id": "nope", "status": "out"},
