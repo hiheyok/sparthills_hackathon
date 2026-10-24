@@ -10,10 +10,11 @@
   const KM_TO_MI = 0.621371;
   const fmtMi = (km) => { const v = km * KM_TO_MI; return (v < 10 ? v.toFixed(1) : Math.round(v)) + ' mi'; };
   const SAVE_KEY = 'supplyline.last.v1';
+  const LISTS_KEY = 'haven.supply-lists.v1';
 
   const safeStore = {
     get(k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
-    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage full or blocked */ } },
+    set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { return false; } },
   };
 
   const EXAMPLES = [
@@ -23,9 +24,14 @@
       text: "Earthquake. We smell gas in the garage, there's no running water and the power is out. There are 4 of us and a dog. We need water, canned food, and a way to charge our phones." },
     { place: 'Downtown', radius: '8',
       text: "A storm took out our power three days ago. We need D batteries for our lantern and propane for the camp stove." },
+    { place: 'Downtown', radius: '8', text: 'A hurricane warning is in effect. We need bottled water, canned food, flashlights, batteries and a first aid kit.' },
+    { place: 'Downtown', radius: '8', text: 'Flooding has disrupted our water supply. We need bottled water, canned food, a first aid kit and hygiene supplies.' },
+    { place: 'Downtown', radius: '8', text: 'A tornado has damaged our neighborhood and the power is out. We need water, canned food, flashlights and a first aid kit.' },
   ];
 
   const state = { meta: null, customLocations: {}, radius: 8, traces: [], last: null, running: false };
+
+  const scrollBehavior = () => window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth';
 
   // ------------------------------------------------------------- utilities
   function pacificMinutes() {
@@ -130,28 +136,28 @@
   });
 
   // ------------------------------------------------------------------- map
-  const mapState = { map: null, layer: null, straight: null, token: 0, plan: null, line: null, loading: false, bounds: null, maxZoom: 14 };
+  const mapState = { map: null, initializing: null, straight: null, token: 0, plan: null, cachedRoad: null, line: null, loading: false, bounds: null, maxZoom: 14 };
 
   function ensureMap() {
-    const el = $('#map');
+    // The restored landing page uses Haven's illustration; load the live map on results.
+    if (!document.body.classList.contains('has-results')) return null;
     if (mapState.map) return mapState.map;
-    if (!window.L) { el.textContent = 'The map could not load. Directions links still work.'; return null; }
-    el.textContent = '';
+    if (mapState.initializing) return null;
+    const el = $('#map');
     el.classList.add('has-map');
-    mapState.map = L.map(el, { zoomControl: true, attributionControl: true }).setView([37.3382, -121.8863], 12);
-    // OpenStreetMap's tile policy needs a Referer, so send the site origin (and nothing more).
-    const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, attribution: '&copy; OpenStreetMap contributors', referrerPolicy: 'strict-origin-when-cross-origin',
-    }).addTo(mapState.map);
-    let loaded = 0, failed = 0;
-    const warn = $('#mapWarn');
-    tiles.on('tileload', () => { loaded++; if (warn) warn.hidden = true; });
-    tiles.on('tileerror', () => {
-      failed++;
-      if (!loaded && failed >= 3 && warn) warn.hidden = false;   // offline or blocked: the route is still drawn
-    });
-    mapState.layer = L.layerGroup().addTo(mapState.map);
-    return mapState.map;
+    if (!window.HavenMaps) { el.textContent = 'The map is unavailable. Directions still work.'; return null; }
+    mapState.initializing = HavenMaps.create(el, state.meta?.maps || {}, {
+      onFallback() {
+        $('#mapWarn').textContent = 'Google Maps unavailable. Showing backup map.';
+        $('#mapWarn').hidden = false;
+      },
+      onTileError() { $('#mapWarn').hidden = false; },
+    }).then((adapter) => {
+      mapState.map = adapter;
+      if (mapState.plan) drawRoute(mapState.plan, mapState.cachedRoad);
+      else showOrigin();
+    }).catch(() => { el.textContent = 'The map is unavailable. Directions still work.'; });
+    return null;
   }
 
   // On wide screens the map is a sticky column beside the results. On phones a map at the very
@@ -167,15 +173,19 @@
     if (mapState.map) setTimeout(fitMap, 60);
   }
   wide.addEventListener('change', placeMap);
+  new ResizeObserver(() => requestAnimationFrame(fitMap)).observe($('#map'));
   window.addEventListener('resize', () => requestAnimationFrame(fitMap));
 
   function fitMap() {
-    if (!mapState.map) return;
-    mapState.map.invalidateSize({ pan: false });
-    if (mapState.bounds) mapState.map.fitBounds(mapState.bounds, { padding: [40, 40], maxZoom: mapState.maxZoom, animate: false });
+    const map = mapState.map;
+    if (!map) return;
+    map.resize();
+    if (mapState.bounds) map.fit(mapState.bounds, mapState.maxZoom);
+    else {
+      const loc = mapState.plan ? mapState.plan.location : currentLoc();
+      if (loc) map.setView([loc.lat, loc.lng], map.getZoom());
+    }
   }
-
-  const pin = (cls, html, size) => L.divIcon({ className: `pin ${cls}`, html, iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
 
   function showOrigin() {
     // Form edits describe the next search; the map still belongs to the displayed plan.
@@ -186,12 +196,12 @@
     mapState.token++;                               // a road route still loading belongs to the old view
     mapState.bounds = null;
     $('#mapLink').hidden = true;
-    $('#mapNote').textContent = 'Pick where you are and your route appears here.';
-    mapState.layer.clearLayers();
-    L.marker([loc.lat, loc.lng], { icon: pin('pin-you', '', 20), keyboard: false }).addTo(mapState.layer);
-    L.circle([loc.lat, loc.lng], { radius: +$('#radius').value * 1000, color: '#0a4da2', weight: 2, dashArray: '6 6', fillOpacity: 0.04 }).addTo(mapState.layer);
-    map.setView([loc.lat, loc.lng], 12);
-    setTimeout(() => map.invalidateSize(), 50);
+    $('#mapNote').textContent = 'Select a store to view supplies.';
+    map.clear();
+    map.marker([loc.lat, loc.lng], { kind: 'pin-you', title: 'Your location' });
+    map.setView([loc.lat, loc.lng], 13);
+    $('#mapLocation').textContent = loc.label;
+    setTimeout(fitMap, 50);
   }
   $('#radius').addEventListener('change', showOrigin);
 
@@ -215,7 +225,7 @@
   async function loadRoad(plan, line, cached) {
     const token = mapState.token;
     mapState.loading = true;
-    $('#mapNote').textContent = 'Finding the fastest road route...';
+    $('#mapNote').textContent = 'Finding route…';
     let road = validRoad(cached) ? cached : null;
     let failure = 'Road directions are unavailable right now.';
     if (!road) {
@@ -229,50 +239,57 @@
     mapState.loading = false;
     const note = $('#mapNote');
     if (!road) {
-      note.innerHTML = `${esc(failure)} The dashed line only connects stops; it is not a driving route. Use Directions or <button type="button" class="btn-small" data-action="retry-road">Retry road route</button>.`;
+      note.innerHTML = `${esc(failure)} Dashed line: stops only. <button type="button" class="btn-small" data-action="retry-road">Retry route</button>.`;
       return;
     }
-    L.polyline(road.path, { color: '#ffffff', weight: 10, opacity: 0.9, lineJoin: 'round', smoothFactor: 0 }).addTo(mapState.layer);
-    const drawn = L.polyline(road.path, { color: '#0a4da2', weight: 5, opacity: 0.95, lineJoin: 'round', smoothFactor: 0 }).addTo(mapState.layer);
-    if (mapState.straight) mapState.layer.removeLayer(mapState.straight);
-    mapState.bounds = drawn.getBounds().extend(L.latLngBounds(line));
+    mapState.map.line(road.path, { color: '#ffffff', weight: 10 });
+    mapState.map.line(road.path, { color: '#1a73e8', weight: 5 });
+    if (mapState.straight) mapState.straight.remove();
+    mapState.bounds = [...road.path, ...line];
     mapState.maxZoom = 15;
     fitMap();
-    note.textContent = `Fastest road route: about ${Math.max(1, Math.round(road.duration_min))} min, ${fmtMi(road.distance_km)} (OpenStreetMap roads, no live traffic). Small circles are other stores with stock.`;
+    note.textContent = `${Math.max(1, Math.round(road.duration_min))} min · ${fmtMi(road.distance_km)} · No live traffic`;
     if (!cached && state.last && state.last.result && state.last.result.plan === plan) {
       state.last.road = road;                                  // keep it so a saved plan shows the road route offline
       safeStore.set(SAVE_KEY, state.last);
     }
   }
 
+  function stockPopup(store, items) {
+    return `<div class="stock-popup"><h3>${esc(store.name)}</h3><p>Demo inventory</p>
+      <ul class="popup-inventory" tabindex="0" aria-label="Supplies at ${esc(store.name)}">${items.map((i) => `<li>${esc(i.name)}${i.qty ? ` ×${i.qty}` : ''}</li>`).join('')}</ul>
+<p>${directions(store)}</p></div>`;
+  }
+
   function drawRoute(plan, cachedRoad) {
+    mapState.plan = plan;
+    mapState.cachedRoad = cachedRoad;
     const map = ensureMap();
     const loc = plan.location;
     if (!map) return;
     mapState.token++;
     mapState.plan = plan;
-    mapState.layer.clearLayers();
+    map.clear();
     const bounds = [[loc.lat, loc.lng]];
-    L.circle([loc.lat, loc.lng], { radius: loc.radius_km * 1000, color: '#0a4da2', weight: 2, dashArray: '6 6', fillOpacity: 0.04 }).addTo(mapState.layer);
     const inRoute = new Set(plan.route.stops.map((s) => s.store.id));
     const seen = new Set();
     plan.results.forEach((r) => r.stores.forEach((s) => {
       if (inRoute.has(s.id) || seen.has(s.id)) return;
       seen.add(s.id);
-      L.marker([s.lat, s.lng], { icon: pin('pin-alt', '', 12), title: s.name, keyboard: false }).addTo(mapState.layer);
+      const items = plan.results.filter((result) => result.stores.some((store) => store.id === s.id)).map((result) => ({ name: result.label }));
+      map.marker([s.lat, s.lng], { kind: 'pin-alt', title: s.name, html: stockPopup(s, items) });
     }));
     const line = [[loc.lat, loc.lng]];
     mapState.line = line;
     plan.route.stops.forEach((s) => {
       line.push([s.store.lat, s.store.lng]);
       bounds.push([s.store.lat, s.store.lng]);
-      L.marker([s.store.lat, s.store.lng], { icon: pin('', String(s.order), 34), title: s.store.name, keyboard: false })
-        .bindTooltip(`${s.order}. ${esc(s.store.name)}`, { direction: 'top', offset: [0, -14] }).addTo(mapState.layer);
+      map.marker([s.store.lat, s.store.lng], { label: String(s.order), title: s.store.name, html: stockPopup(s.store, s.items) });
     });
     mapState.straight = line.length > 1
-      ? L.polyline(line, { color: '#0a4da2', weight: 4, opacity: 0.8, dashArray: '8 8' }).addTo(mapState.layer) : null;
-    L.marker([loc.lat, loc.lng], { icon: pin('pin-you', '', 20), keyboard: false }).addTo(mapState.layer);
-    mapState.bounds = bounds.length > 1 ? L.latLngBounds(bounds) : null;
+      ? map.line(line, { weight: 4, dashed: true }) : null;
+    map.marker([loc.lat, loc.lng], { kind: 'pin-you', title: 'Your location' });
+    mapState.bounds = bounds.length > 1 ? bounds : null;
     mapState.maxZoom = 14;
     fitMap();
     if (bounds.length === 1) map.setView([loc.lat, loc.lng], 12);
@@ -280,7 +297,7 @@
     if (plan.route.stops.length) {
       link.href = googleRouteUrl(plan);
       link.hidden = false;
-      $('#mapNote').textContent = 'Finding the fastest road route...';
+      $('#mapNote').textContent = 'Finding route…';
       loadRoad(plan, line, cachedRoad);
     } else {
       link.hidden = true;
@@ -300,7 +317,7 @@
     if (st === 'done') {
       li.classList.add('is-done');
       if (info && info.mode === 'bedrock') meta.textContent = `${shortModel(info.model)} on Bedrock, ${(info.ms / 1000).toFixed(1)}s`;
-      else if (info && info.mode === 'rules') { li.classList.add('is-fallback'); meta.textContent = 'Rules fallback: Bedrock unavailable'; }
+      else if (info && info.mode === 'rules') { li.classList.add('is-fallback'); meta.textContent = 'Local planner'; }
       else if (info && info.note) meta.textContent = info.note;
     }
     if (st === 'skipped') { li.classList.add('is-skipped'); meta.textContent = 'Not needed: everything is in stock'; }
@@ -329,7 +346,7 @@
     if (h.people) pills.push(`${h.people} people`);
     if (h.infants) pills.push('infant'); if (h.elderly) pills.push('older adult'); if (h.pets) pills.push('pets');
     (h.medical || []).forEach((m) => pills.push(m));
-    $('#r-understood').innerHTML = `<details><summary>What we understood</summary>
+    $('#r-understood').innerHTML = `<details><summary>Your request</summary>
       ${d.summary ? `<p class="sumline">${esc(d.summary)}</p>` : ''}
       ${pills.length ? `<div class="pills">${pills.map((p) => `<span class="pill">${esc(p)}</span>`).join('')}</div>` : ''}
       <ul class="need-list">${intent.needs.map((n) => `<li><span><b>${esc(n.label)}</b>${n.qty > 1 ? ` x${n.qty}` : ''}
@@ -361,7 +378,7 @@
   }
 
   function renderByItem(results, open) {
-    $('#r-items').innerHTML = `<details ${open ? 'open' : ''}><summary>Every item, store by store</summary>` + results.map((r) => {
+    $('#r-items').innerHTML = `<details ${open ? 'open' : ''}><summary>All supplies</summary>` + results.map((r) => {
       const chip = r.status === 'found' ? ['In stock nearby', 'ok'] : r.status === 'partial' ? ['Limited stock', 'warn'] : ['Not available nearby', 'bad'];
       return `<div class="item-block"><div class="item-head"><h4>${esc(r.label)}${r.qty > 1 ? ` x${r.qty}` : ''}</h4>
         <span class="chip ${chip[1]}">${chip[0]}</span>${r.inferred ? '<span class="tag ai" title="You did not say this, but the plan needs it">Inferred</span>' : ''}</div>
@@ -375,12 +392,14 @@
             <a class="btn-small" target="_blank" rel="noopener" href="https://maps.apple.com/?daddr=${q}">Apple Maps</a>`;
   }
 
-  function ticket(i) {
+  function ticket(i, storeId) {
     const f = freshness(i);
-    return `<li class="ticket ${i.is_alt ? 'swap' : ''}"><div class="ticket-main">
+    const key = `${storeId}:${i.item_id}`;
+    const checked = !!(state.last && (state.last.collected || []).includes(key));
+    return `<li class="ticket ${i.is_alt ? 'swap' : ''} ${checked ? 'collected' : ''}"><div class="ticket-content"><div class="ticket-main">
       ${i.is_alt ? '<span class="tag">Substitute</span>' : ''}<span class="ticket-name">${esc(i.name)}${i.qty > 1 ? ` x${i.qty}` : ''}</span>
       ${i.is_alt ? `<span class="ticket-sub">instead of ${esc(i.replaces_name)}</span>` : ''}</div>
-      <div class="ticket-sub"><span class="${f.cls}">${esc(f.text)}</span>${i.low ? '<span class="warn">Low stock</span>' : ''}${i.qty_needed > i.qty ? `<span class="warn">Buy ${i.qty} of the ${i.qty_needed} you need</span>` : ''}</div></li>`;
+      <div class="ticket-sub"><span class="${f.cls}">${esc(f.text)}</span>${i.low ? '<span class="warn">Low stock</span>' : ''}${i.qty_needed > i.qty ? `<span class="warn">Buy ${i.qty} of the ${i.qty_needed} you need</span>` : ''}</div></div></li>`;
   }
 
   function reportPanel(stop) {
@@ -394,6 +413,8 @@
   }
 
   function renderPlan(b, reveal) {
+    document.body.classList.add('has-results');
+    $('#mapLocation').textContent = state.originLabel || 'Your search area';
     const { plan, brief } = b;
     const stops = plan.route.stops;
     const sum = plan.summary;
@@ -403,17 +424,16 @@
       html = `<div class="empty-plan"><h2 id="planTitle">${esc(brief.headline)}</h2><p>${esc(brief.summary || '')}</p>
         <button type="button" class="btn-quiet" data-action="wider">Search a wider area</button></div>`;
     } else {
-      html = `<h2 class="plan-title" id="planTitle">${esc(brief.headline)}</h2>
-        ${brief.summary ? `<p class="lede">${esc(brief.summary)}</p>` : ''}
+      html = `<h2 class="plan-title" id="planTitle">Your route</h2>
         <div class="facts-row"><span>${stops.length} stop${stops.length > 1 ? 's' : ''}</span><span>${plan.route.total_drive_min} min driving</span><span>${sum.covered ?? sum.in_route} of ${sum.needs} items covered</span>${sum.swapped ? `<span>${sum.swapped} substitute${sum.swapped > 1 ? 's' : ''}</span>` : ''}</div>
         <div id="mapSlot" class="map-slot"></div>
-        <ol class="route"><li class="origin"><span class="node" aria-hidden="true"></span><div class="origin-text"><b>You are here</b><small>${esc(state.originLabel || '')}${state.originLabel ? ', ' : ''}leave about ${esc(plan.route.leaves)}</small></div></li>
+        <details class="route-details"><summary>Pickup route · ${stops.length} stops</summary><ol class="route"><li class="origin"><span class="node" aria-hidden="true"></span><div class="origin-text"><b>Start</b><small>${esc(state.originLabel || '')}${state.originLabel ? ', ' : ''}leave about ${esc(plan.route.leaves)}</small></div></li>
         ${stops.map((s) => `<li class="stop"><span class="node" aria-hidden="true">${s.order}</span><div>
           <h3>${esc(s.store.name)}</h3>
           <div class="where-line"><span><b>${s.leg_min} min</b> drive, ${fmtMi(s.leg_km)}</span><span>Arrive about ${esc(s.arrive)}</span>${s.open_note ? `<span>${esc(s.open_note)}</span>` : ''}${s.store.store_note ? `<span class="warn">${esc(s.store.store_note)}</span>` : ''}</div>
           ${says[s.order] ? `<p class="say">${esc(says[s.order])}</p>` : ''}
-          <ul class="tickets">${s.items.map(ticket).join('')}</ul>
-          <div class="stop-actions">${directions(s.store)}${reportPanel(s)}</div></div></li>`).join('')}</ol>`;
+          <ul class="tickets">${s.items.map((i) => ticket(i, s.store.id)).join('')}</ul>
+          <div class="stop-actions">${directions(s.store)}${reportPanel(s)}</div></div></li>`).join('')}</ol></details>`;
     }
     const unresolved = plan.unresolved.filter((u) => !plan.alternatives.some((a) => a.for_item === u.item_id));
     if (unresolved.length) html += `<p class="lede">Not found nearby: ${unresolved.map((u) => esc(u.name)).join(', ')}.</p>`;
@@ -427,6 +447,14 @@
     rescueMap();                                   // the map may live inside this section on phones
     el.classList.toggle('reveal', !!reveal);
     el.innerHTML = html;
+    if (state.last?.text) {
+      const quote = document.createElement('div');
+      quote.className = 'request-quote';
+      quote.innerHTML = `<span>You asked</span><p>${esc(state.last.text)}</p>`;
+      $('#planTitle', el)?.insertAdjacentElement('afterend', quote);
+    }
+    $('#r-route').replaceChildren(...$$('.route-details, .notes-grid', el));
+    renderChecklist(plan);
     placeMap();
   }
 
@@ -455,11 +483,11 @@
   }
 
   function renderActions() {
-    $('#r-actions').innerHTML = `<button type="button" class="btn-quiet" data-action="copy">Copy plan as text</button>
-      <a class="btn-quiet" data-action="sms" href="#" style="text-decoration:none;display:inline-flex;align-items:center">Text this plan</a>
+    $('#r-actions').innerHTML = `<button type="button" class="btn-quiet" data-action="copy">Copy</button>
+      <a class="btn-quiet" data-action="sms" href="#" style="text-decoration:none;display:inline-flex;align-items:center">Text</a>
       <button type="button" class="btn-quiet" data-action="print">Print</button>`;
-    $('#r-followup').innerHTML = `<h2 class="section-title">Ask about your plan</h2>
-      <form id="fuForm"><div class="field"><label for="fuQ" class="sr">Your question</label><input id="fuQ" maxlength="400" autocomplete="off" placeholder="Can the insulin go straight into the cooler with ice?"></div>
+    $('#r-followup').innerHTML = `<h2 class="section-title">Ask a question</h2>
+      <form id="fuForm"><div class="field"><label for="fuQ" class="sr">Your question</label><input id="fuQ" maxlength="400" autocomplete="off" placeholder="Ask about your supplies…"></div>
       <button class="btn-quiet" type="submit">Ask</button></form><div id="fuAnswer" aria-live="polite"></div>`;
   }
 
@@ -474,7 +502,7 @@
         <td class="num">${(t.ms / 1000).toFixed(1)}s</td><td class="num">${t.tokens_in} / ${t.tokens_out}</td></tr>`;
     }).join('');
     const keepOpen = $('#r-trace details') && $('#r-trace details').open;   // do not collapse it while someone is reading it
-    $('#r-trace').innerHTML = `<details${keepOpen ? ' open' : ''}><summary>Under the hood: what Bedrock did</summary>
+    $('#r-trace').innerHTML = `<details${keepOpen ? ' open' : ''}><summary>Plan details</summary>
       <p class="trace-note">Stock, distance, opening hours and routing are plain code, so they are repeatable. Amazon Bedrock reads your request, judges which substitutes are safe, and writes the briefing. It can only choose catalog items, and substitutes only from items confirmed in stock near you. Prescriptions are never substituted.</p>
       <div class="table-wrap"><table><thead><tr><th>Step</th><th>Handled by</th><th>Model</th><th>Time</th><th>Tokens in / out</th></tr></thead><tbody>${rows}</tbody></table></div></details>`;
   }
@@ -490,17 +518,19 @@
   function clearResults() {
     mapState.token++;
     mapState.plan = null;
+    mapState.cachedRoad = null;
     mapState.line = null;
     mapState.loading = false;
     showOrigin();
     rescueMap();
-    ['r-safety', 'r-plan', 'r-alts', 'r-items', 'r-understood', 'r-actions', 'r-followup', 'r-trace'].forEach((id) => { $('#' + id).innerHTML = ''; });
+    ['r-safety', 'r-plan', 'r-checklist', 'r-route', 'r-alts', 'r-items', 'r-understood', 'r-actions', 'r-followup', 'r-trace'].forEach((id) => { $('#' + id).innerHTML = ''; });
     $('#notice').hidden = true;
     $('#saved').hidden = true;
     $('#r-plan').classList.remove('reveal');
   }
 
   async function run() {
+    showWorkspace();
     if (state.running) return;
     const text = $('#text').value.trim();
     const err = $('#formError');
@@ -528,9 +558,11 @@
     $('#go').disabled = true;
     $('#go').textContent = 'Working...';
     clearResults();
+    document.body.classList.add('has-results');
+    ensureMap();
     $('#results').hidden = false;
     resetProgress();
-    $('#progress').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    $('#progress').scrollIntoView({ behavior: scrollBehavior(), block: 'nearest' });
     const base = { lat: loc.lat, lng: loc.lng, radius_km: state.radius, local_minutes: pacificMinutes() };
 
     try {
@@ -564,7 +596,7 @@
       const b = await post('/api/brief', { ...base, intent: u.intent, alternatives: alts });
       state.traces.push(b.trace);
       setStep('brief', 'done', b.trace);
-      state.last = { savedAt: Date.now(), result: b, intent: u.intent, traces: state.traces, text, radius: state.radius, origin: loc.label };
+      state.last = { savedAt: Date.now(), result: b, intent: u.intent, traces: state.traces, text, radius: state.radius, origin: loc.label, categories: Object.fromEntries((state.meta?.catalog || []).map((item) => [item.id, item.category])) };
       renderPlan(b, true);
       renderAlternatives(b.plan.alternatives);
       renderByItem(b.plan.results, false);
@@ -572,7 +604,7 @@
       renderTrace();
       drawRoute(b.plan);
       safeStore.set(SAVE_KEY, state.last);
-      $('#r-plan').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      $('#r-plan').scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
     } catch (e) {
       const actions = state.last || safeStore.get(SAVE_KEY) ? '<button type="button" class="btn-small" data-action="open-saved">Open last saved plan</button>' : '';
       showNotice(e.message || 'Something went wrong.', 'bad', `<button type="button" class="btn-small" data-action="retry">Try again</button> ${actions}`);
@@ -581,18 +613,20 @@
       state.running = false;
       $('#go').disabled = false;
       $('#go').textContent = 'Find supplies';
+      $('#progress').hidden = true;
     }
   }
 
-  function openSaved() {
+  function openSaved(saved = safeStore.get(SAVE_KEY)) {
     if (state.running) return;
-    const saved = safeStore.get(SAVE_KEY);
     if (!saved) return;
+    showWorkspace();
     clearResults();
     state.radius = saved.radius;
     state.originLabel = saved.origin;
     state.traces = saved.traces || [];
     state.last = saved;
+    safeStore.set(SAVE_KEY, saved);
     const loc = saved.result.plan.location;
     addLocation('__saved', { lat: loc.lat, lng: loc.lng, label: saved.origin || 'Saved location' });
     $('#place').value = '__saved';
@@ -608,7 +642,7 @@
     renderActions();
     renderTrace();
     drawRoute(saved.result.plan, saved.road);
-    showNotice(`Showing the plan saved on this device at ${new Date(saved.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Stock may have changed.`);
+    showNotice(`Saved ${new Date(saved.savedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}. Stock may have changed.`);
   }
 
   function showSavedPrompt() {
@@ -617,10 +651,122 @@
     const t = new Date(saved.savedAt).toLocaleString([], { hour: 'numeric', minute: '2-digit', month: 'short', day: 'numeric' });
     const el = $('#saved');
     el.hidden = false;
-    el.innerHTML = `<p><b>You have a saved plan from ${esc(t)}.</b> It works without a connection, but stock may have changed.</p><button type="button" class="btn-quiet" data-action="open-saved">Open saved plan</button>`;
+    el.innerHTML = `<p><b>Saved ${esc(t)}.</b> Available offline.</p><button type="button" class="btn-quiet" data-action="open-saved">Open saved plan</button>`;
+  }
+
+  // ---------------------------------------------- Haven checklist and saved-list components
+  function supplyIcon(category) {
+    const paths = {
+      Water: '<path d="M12 3s-7 8-7 12a7 7 0 0 0 14 0c0-4-7-12-7-12Z"/><path d="M8 15a4 4 0 0 0 4 4"/>',
+      Food: '<path d="M4 3v6a3 3 0 0 0 6 0V3M7 3v18M18 3c-3 3-4 7-4 9h5M19 3v18"/>',
+      'Power and light': '<rect x="2" y="7" width="17" height="10" rx="2"/><path d="M22 10v4M7 10v4"/>',
+      Medical: '<path d="M9 3h6v6h6v6h-6v6H9v-6H3V9h6Z"/>',
+      'Health and safety': '<path d="M12 3 3 7v6c0 5 9 8 9 8s9-3 9-8V7l-9-4Z"/><path d="m8 12 3 3 5-6"/>',
+      Pets: '<path d="M7 15c-3 4 1 7 5 5 4 2 8-1 5-5l-3-3c-1-1-3-1-4 0l-3 3Z"/><ellipse cx="5" cy="9" rx="2" ry="3"/><ellipse cx="10" cy="5" rx="2" ry="3"/><ellipse cx="16" cy="5" rx="2" ry="3"/><ellipse cx="21" cy="10" rx="2" ry="3"/>',
+    };
+    return `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[category] || '<path d="m3 7 9-4 9 4v10l-9 4-9-4Z"/><path d="m3 7 9 4 9-4M12 11v10"/>'}</svg>`;
+  }
+
+  function categoryFor(id) {
+    return state.meta?.catalog?.find((item) => item.id === id)?.category || state.last?.categories?.[id] || 'Supplies';
+  }
+
+  function updateChecklistCount() {
+    const boxes = $$('#r-checklist [data-collected]');
+    const label = $('#collectedCount');
+    if (label) label.textContent = `${boxes.filter((box) => box.checked).length}/${boxes.length} pickups collected`;
+  }
+
+  function renderChecklist(plan) {
+    const collected = new Set(state.last?.collected || []);
+    const rows = plan.route.stops.flatMap((stop) => stop.items.map((item) => ({
+      ...item, store: stop.store, category: categoryFor(item.item_id), pickupKey: `${stop.store.id}:${item.item_id}`,
+    })));
+    const missing = plan.unresolved.map((item) => ({ ...item, category: categoryFor(item.item_id), unavailable: true }));
+    const allRows = [...rows, ...missing];
+    const categories = ['All supplies', ...new Set(allRows.map((item) => item.category))];
+    $('#r-checklist').innerHTML = `<div class="checklist-heading"><h2>Your supply checklist <span>${allRows.length}</span></h2><span id="collectedCount"></span></div>
+      <div class="category-tabs" role="group" aria-label="Filter supplies">${categories.map((category, index) => `<button type="button" data-action="category" data-category="${esc(category)}" aria-pressed="${index === 0}" class="${index === 0 ? 'active' : ''}">${esc(category)}</button>`).join('')}</div>
+      <div class="supply-list">${allRows.map((item) => {
+        const checked = collected.has(item.pickupKey);
+        return `<div class="supply-row ${checked ? 'collected' : ''}" data-category="${esc(item.category)}">
+          <label class="collect-check"><input type="checkbox" ${item.unavailable ? 'disabled' : `data-collected="${esc(item.pickupKey)}"`} aria-label="Mark ${esc(item.name)} collected${item.store ? ` at ${esc(item.store.name)}` : ''}" ${checked ? 'checked' : ''}></label>
+          <span class="supply-icon" aria-hidden="true">${supplyIcon(item.category)}</span>
+          <div class="supply-name"><b>${esc(item.name)}</b><small>${item.qty} unit${item.qty === 1 ? '' : 's'}${item.is_alt ? '<span class="alt-label">Alternative</span>' : ''}${item.store ? ` · ${esc(item.store.name)}` : ''}</small></div>
+          <span class="stock-label ${item.unavailable ? 'out' : item.low ? 'low' : 'available'}">${item.unavailable ? 'Not in route' : item.low ? 'Limited stock' : 'In stock'}<span class="stock-dot"></span></span></div>`;
+      }).join('') || '<p class="empty-checklist">No supplies in this plan.</p>'}</div>
+      <button type="button" class="alternative-card" data-action="alternatives"><span class="alt-icon" aria-hidden="true">✦</span><b>Find alternatives</b><span aria-hidden="true">↗</span></button>`;
+    updateChecklistCount();
+  }
+
+  function readLists() {
+    const records = safeStore.get(LISTS_KEY);
+    return Array.isArray(records) ? records.filter((record) => record?.id && record?.snapshot?.result?.plan) : [];
+  }
+
+  function updateSavedCount() {
+    const count = readLists().length;
+    $('#savedCount').textContent = String(count);
+    $('#savedCount').hidden = !count;
+  }
+
+  function showWorkspace() {
+    $('.shell').hidden = false;
+    $('#savedPage').hidden = true;
+    $('.nav-link[data-action="new-request"]').classList.add('active');
+    $('.nav-link[data-action="saved-list"]').classList.remove('active');
+    if (mapState.map) requestAnimationFrame(fitMap);
+  }
+
+  function saveList() {
+    if (!state.last || state.running) return;
+    const records = readLists();
+    const existing = records.find((record) => record.snapshot.text === state.last.text && record.snapshot.origin === state.last.origin && record.snapshot.radius === state.last.radius);
+    const record = { id: existing?.id || crypto.randomUUID(), snapshot: JSON.parse(JSON.stringify(state.last)) };
+    if (safeStore.set(LISTS_KEY, [record, ...records.filter((entry) => entry.id !== record.id)])) {
+      updateSavedCount();
+      toast(existing ? 'Supply list updated.' : 'Supply list saved.');
+    } else toast('Your browser could not save this list. Try downloading it.');
+  }
+
+  function showSavedLists() {
+    if (state.running) { toast('Your plan is still being prepared.'); return; }
+    const records = readLists();
+    $('.shell').hidden = true;
+    $('#savedPage').hidden = false;
+    $('.nav-link[data-action="new-request"]').classList.remove('active');
+    $('.nav-link[data-action="saved-list"]').classList.add('active');
+    $('#savedLists').innerHTML = records.length ? records.map((record) => {
+      const snapshot = record.snapshot;
+      const count = snapshot.result.plan.route.stops.reduce((total, stop) => total + stop.items.length, 0);
+      return `<article class="saved-card"><div class="saved-card-top"><span class="scenario-icon" aria-hidden="true">${supplyIcon('Supplies')}</span><button type="button" class="icon-btn" data-action="delete-list" data-id="${esc(record.id)}" aria-label="Delete ${esc(snapshot.text)}">×</button></div><small>${esc(new Date(snapshot.savedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }))}</small><h2>${esc(snapshot.origin || 'Supply list')}</h2><p>${esc(snapshot.text)}</p><p>${count} pickups · ${snapshot.result.plan.route.stops.length} stops</p><button type="button" class="text-button" data-action="open-list" data-id="${esc(record.id)}">Open supply list ↗</button></article>`;
+    }).join('') : `<div class="empty-saved"><div aria-hidden="true">♧</div><h2>No saved lists</h2><p>Save a supply plan to see it here.</p><button type="button" class="primary" data-action="new-request">Create a plan ↗</button>${safeStore.get(SAVE_KEY) ? '<button type="button" class="text-button" data-action="open-saved">Open last automatic save</button>' : ''}</div>`;
+    updateSavedCount();
+    $('#savedTitle').setAttribute('tabindex', '-1');
+    $('#savedTitle').focus();
   }
 
   // ---------------------------------------------------------------- events
+  document.addEventListener('fullscreenchange', () => {
+    const expanded = !!document.fullscreenElement;
+    $('#expandMap').setAttribute('aria-label', expanded ? 'Exit fullscreen map' : 'Expand map');
+    $('#expandMap').title = expanded ? 'Exit fullscreen map' : 'Expand map';
+    requestAnimationFrame(fitMap);
+  });
+  document.addEventListener('change', (e) => {
+    const checkbox = e.target.closest('[data-collected]');
+    if (!checkbox || !state.last) return;
+    const collected = new Set(state.last.collected || []);
+    if (checkbox.checked) collected.add(checkbox.dataset.collected);
+    else collected.delete(checkbox.dataset.collected);
+    state.last.collected = [...collected];
+    checkbox.closest('.supply-row').classList.toggle('collected', checkbox.checked);
+    safeStore.set(SAVE_KEY, state.last);
+    const records = readLists();
+    const matching = records.find((record) => record.snapshot.text === state.last.text && record.snapshot.origin === state.last.origin && record.snapshot.radius === state.last.radius);
+    if (matching) { matching.snapshot = JSON.parse(JSON.stringify(state.last)); safeStore.set(LISTS_KEY, records); }
+    updateChecklistCount();
+  });
   $('#form').addEventListener('submit', (e) => { e.preventDefault(); run(); });
 
   // Enter searches; Shift+Enter makes a new line. Do not fire while an input method (Japanese,
@@ -670,6 +816,67 @@
     if (act === 'retry') run();
     else if (act === 'retry-road' && mapState.plan && !mapState.loading) loadRoad(mapState.plan, mapState.line);
     else if (act === 'open-saved') openSaved();
+    else if (act === 'saved-list') showSavedLists();
+    else if (act === 'save-list') saveList();
+    else if (act === 'open-list') {
+      const saved = readLists().find((record) => record.id === t.dataset.id);
+      if (saved) openSaved(saved.snapshot);
+    }
+    else if (act === 'delete-list') {
+      if (safeStore.set(LISTS_KEY, readLists().filter((record) => record.id !== t.dataset.id))) { showSavedLists(); toast('Supply list removed.'); }
+      else toast('Your browser could not remove this list.');
+    }
+    else if (act === 'category') {
+      $$('#r-checklist .category-tabs button').forEach((button) => { const active = button === t; button.classList.toggle('active', active); button.setAttribute('aria-pressed', String(active)); });
+      $$('#r-checklist .supply-row').forEach((row) => { row.hidden = t.dataset.category !== 'All supplies' && row.dataset.category !== t.dataset.category; });
+    }
+    else if (act === 'alternatives') {
+      if ($('#r-alts').textContent.trim()) $('#r-alts').scrollIntoView({ behavior: scrollBehavior(), block: 'start' });
+      else toast('Your plan has no unavailable supplies needing alternatives.');
+    }
+    else if (act === 'settings') {
+      $('#mapsConnection').textContent = $('#map').dataset.provider === 'google' ? 'Connected' : state.meta?.maps?.apiKey ? ($('#map').dataset.provider ? 'Using backup map' : 'Connecting…') : 'Not configured';
+      $('#aiConnection').textContent = state.traces.some((trace) => trace?.mode === 'bedrock') ? 'Connected' : 'Local planner';
+      $('#settingsDialog').showModal();
+    }
+    else if (act === 'close-settings') $('#settingsDialog').close();
+    else if (act === 'new-request') {
+      if (state.running) { toast('Your plan is still being prepared.'); return; }
+      showWorkspace();
+      clearResults();
+      document.body.classList.remove('has-results');
+      $('#results').hidden = true;
+      $('#progress').hidden = true;
+      $('#formError').hidden = true;
+      $('#text').value = '';
+      showSavedPrompt();
+      $('#text').focus({ preventScroll: true });
+      window.scrollTo({ top: 0, behavior: scrollBehavior() });
+    }
+    else if (act === 'recenter-map') {
+      if (mapState.bounds) fitMap();
+      else { const loc = currentLoc(); if (loc && mapState.map) mapState.map.setView([loc.lat, loc.lng], 13); }
+    }
+    else if (act === 'expand-map') {
+      try {
+        if (document.fullscreenElement) await document.exitFullscreen();
+        else await $('.col-map').requestFullscreen();
+      } catch (error) { toast('Fullscreen is unavailable in this browser.'); }
+    }
+    else if (act === 'how' || act === 'about') $('#howDialog').showModal();
+    else if (act === 'close-how') $('#howDialog').close();
+    else if (act === 'download') {
+      if (!state.last) return;
+      const collected = state.last.collected || [];
+      const checklist = state.last.result.plan.route.stops.flatMap((stop) => stop.items.map((i) =>
+        `${collected.includes(`${stop.store.id}:${i.item_id}`) ? '[x]' : '[ ]'} ${i.name} x${i.qty} · ${stop.store.name}`));
+      const text = state.last.result.plan_text + '\n\nSUPPLY CHECKLIST\n' + checklist.join('\n');
+      const url = URL.createObjectURL(new Blob([text], { type: 'text/plain;charset=utf-8' }));
+      const link = document.createElement('a');
+      link.href = url; link.download = 'haven-supply-plan.txt'; link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast('Supply plan downloaded.');
+    }
     else if (act === 'print') window.print();
     else if (act === 'wider') {
       const sel = $('#radius'); const i = sel.selectedIndex;
@@ -734,6 +941,7 @@
       return;
     }
     showSavedPrompt();
+    updateSavedCount();
     if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => { /* optional */ });
   })();
 })();

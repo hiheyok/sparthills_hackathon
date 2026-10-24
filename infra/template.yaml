@@ -41,6 +41,15 @@ Parameters:
       Unix time (seconds) when the demo inventory counts as observed. scripts/deploy.sh sets it to
       the deploy time so every Lambda container agrees on it, which keeps neighbor reports
       authoritative across cold starts. Empty means each container uses its own start time.
+  GoogleMapsApiKey:
+    Type: String
+    Default: ''
+    NoEcho: true
+    Description: Browser Maps JavaScript API key, restricted to the deployed website in Google Cloud.
+  GoogleMapsMapId:
+    Type: String
+    Default: DEMO_MAP_ID
+    Description: Google Maps map ID; use your own map ID for production.
   ThrottleRatePerSecond:
     Type: Number
     Default: 25
@@ -141,6 +150,8 @@ Resources:
       Environment:
         Variables:
           AI_MODE: auto
+          GOOGLE_MAPS_API_KEY: !Ref GoogleMapsApiKey
+          GOOGLE_MAPS_MAP_ID: !Ref GoogleMapsMapId
           BEDROCK_REGION: !Ref BedrockRegion
           BEDROCK_MODEL_IDS: !Ref BedrockModelIds
           REPORTS_TABLE: !Ref ReportsTable

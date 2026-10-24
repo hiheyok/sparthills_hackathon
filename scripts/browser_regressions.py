@@ -7,6 +7,7 @@ AI, road routing and map tiles make no external requests.
 """
 import datetime
 import os
+import re
 import sys
 import threading
 import unittest
@@ -103,10 +104,10 @@ class BrowserRegressions(unittest.TestCase):
         expect(self.page.locator('#go')).to_be_enabled()
 
     def assert_road(self):
-        expect(self.page.locator('#mapNote')).to_contain_text('Fastest road route:')
+        expect(self.page.locator('#mapNote')).to_contain_text('No live traffic')
         line = self.page.locator('#map path[stroke-width="5"]')
         expect(line).to_have_count(1)
-        self.assertGreater(line.get_attribute('d').count('L'), 1)
+        expect(line).to_have_attribute('d', re.compile(r'L.*L'))
         self.assertEqual(self.errors, [])
 
     def assert_stops_visible(self):
@@ -270,6 +271,134 @@ class BrowserRegressions(unittest.TestCase):
         self.page.set_viewport_size({'width': 390, 'height': 844})
         self.assert_road()
         self.assert_stops_visible()
+
+    def configure_test_google_key(self):
+        def meta(route):
+            response = route.fetch()
+            data = response.json()
+            data['maps'] = {'apiKey': 'test-browser-key', 'mapId': 'DEMO_MAP_ID'}
+            route.fulfill(response=response, json=data)
+        self.page.route('**/api/meta', meta)
+
+    def test_google_download_failure_uses_labeled_backup(self):
+        self.configure_test_google_key()
+        self.page.route('https://maps.googleapis.com/maps/api/js?**', lambda r: r.fulfill(status=503, body='unavailable'))
+        self.load()
+        self.submit()
+        expect(self.page.locator('#map')).to_have_attribute('data-provider', 'openstreetmap')
+        expect(self.page.locator('#mapWarn')).to_contain_text('Google Maps unavailable')
+        self.assert_road()
+
+    def test_plan_created_while_google_is_loading_survives_fallback(self):
+        self.configure_test_google_key()
+        pending = []
+        self.page.route('https://maps.googleapis.com/maps/api/js?**', lambda r: pending.append(r))
+        self.load()
+        self.submit()
+        self.page.wait_for_function("() => [...document.scripts].some(s => s.src.startsWith('https://maps.googleapis.com/maps/api/js'))")
+        pending[0].fulfill(status=503, body='unavailable')
+        self.assert_road()
+        self.assert_stops_visible()
+        self.assertEqual(self.errors, [])
+
+    def test_original_homepage_opens_existing_large_map_results(self):
+        self.page.set_viewport_size({'width': 1440, 'height': 900})
+        self.load()
+        expect(self.page.locator('#hero .hero-art')).to_be_visible()
+        expect(self.page.locator('#map')).to_be_hidden()
+        form = self.page.locator('#form').bounding_box()
+        self.assertGreater(form['width'], 1000)
+        self.submit()
+        box = self.page.locator('#map').bounding_box()
+        self.assertGreater(box['width'], 1440 * .65)
+        self.assertGreater(box['height'], 900 * .75)
+        self.assertLess(box['y'], 130)
+        self.page.locator('[data-action="expand-map"]').click()
+        self.page.wait_for_function('!!document.fullscreenElement')
+        self.page.locator('[data-action="expand-map"]').click()
+        self.page.wait_for_function('!document.fullscreenElement')
+        self.assert_road()
+        self.page.locator('[data-action="recenter-map"]').click()
+        self.assert_stops_visible()
+        self.assertEqual(self.errors, [])
+
+    def test_haven_navigation_and_dialog_keyboard_access(self):
+        self.load()
+        self.page.locator('[data-action="how"]').click()
+        expect(self.page.get_by_role('dialog')).to_be_visible()
+        self.page.keyboard.press('Escape')
+        expect(self.page.get_by_role('dialog')).to_be_hidden()
+        self.submit()
+        self.page.locator('[data-action="save-list"]').click()
+        self.page.locator('.results-toolbar [data-action="new-request"]').click()
+        expect(self.page.locator('#hero')).to_be_visible()
+        expect(self.page.locator('#results')).to_be_hidden()
+        expect(self.page.locator('#text')).to_be_focused()
+        self.page.locator('[data-action="saved-list"]').click()
+        expect(self.page.locator('.saved-card')).to_be_visible()
+        self.page.locator('[data-action="open-list"]').click()
+        expect(self.page.locator('#planTitle')).to_be_visible()
+        self.assertEqual(self.errors, [])
+
+    def test_haven_checklist_persists_and_downloads(self):
+        self.load()
+        self.submit()
+        first = self.page.locator('[data-collected]').first
+        key = first.get_attribute('data-collected')
+        first.check()
+        self.page.locator('[data-action="save-list"]').click()
+        self.page.reload()
+        self.page.locator('[data-action="saved-list"]').click()
+        self.page.locator('[data-action="open-list"]').click()
+        expect(self.page.locator(f'[data-collected="{key}"]')).to_be_checked()
+        with self.page.expect_download() as event:
+            self.page.locator('[data-action="download"]').click()
+        download = event.value
+        self.assertEqual(download.suggested_filename, 'haven-supply-plan.txt')
+        text = Path(download.path()).read_text()
+        self.assertIn('SUPPLY CHECKLIST', text)
+        self.assertIn('[x]', text)
+        self.assertEqual(self.errors, [])
+
+    def test_haven_checklist_category_filters_and_saved_list_deletion(self):
+        self.load()
+        self.submit()
+        category = self.page.locator('[data-action="category"]').nth(1)
+        selected = category.get_attribute('data-category')
+        category.click()
+        visible = self.page.locator('.supply-row:visible')
+        self.assertGreater(visible.count(), 0)
+        self.assertTrue(all(row.get_attribute('data-category') == selected for row in visible.all()))
+        self.page.locator('[data-action="category"]').first.click()
+        self.page.locator('[data-action="save-list"]').click()
+        self.page.locator('[data-action="saved-list"]').click()
+        expect(self.page.locator('.saved-card')).to_have_count(1)
+        self.page.locator('[data-action="delete-list"]').click()
+        expect(self.page.locator('.empty-saved')).to_be_visible()
+        expect(self.page.locator('.saved-card')).to_have_count(0)
+        self.assertEqual(self.errors, [])
+
+    def test_haven_store_pins_open_matching_inventory(self):
+        self.load()
+        self.submit()
+        self.assert_road()
+        marker = self.page.locator('#map .pin:not(.pin-you):not(.pin-alt)').first
+        marker.click()
+        expect(self.page.locator('.stock-popup h3')).to_be_visible()
+        expect(self.page.locator('.stock-popup .popup-inventory li').first).to_be_visible()
+        expect(self.page.locator('.stock-popup')).to_contain_text('Demo inventory')
+        self.assertEqual(self.errors, [])
+
+    def test_haven_no_horizontal_overflow_across_screen_sizes(self):
+        self.load()
+        for width in (360, 390, 768, 980, 1280):
+            self.page.set_viewport_size({'width': width, 'height': 900})
+            self.assertTrue(self.page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), width)
+        self.submit()
+        for width in (360, 390, 768, 980, 1280):
+            self.page.set_viewport_size({'width': width, 'height': 900})
+            self.assertTrue(self.page.evaluate('document.documentElement.scrollWidth <= window.innerWidth'), width)
+        self.assertEqual(self.errors, [])
 
     def service_worker_page(self):
         self.context.close()

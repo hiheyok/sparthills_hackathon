@@ -4,6 +4,7 @@ import json
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 os.environ["AI_MODE"] = "off"          # deterministic: rules fallback, no AWS calls
@@ -39,10 +40,10 @@ class HandlerTests(unittest.TestCase):
     def test_static_files_and_security_headers(self):
         status, headers, body = call("GET", "/")
         self.assertEqual(status, 200)
-        self.assertIn(b"SupplyLine", body)
+        self.assertIn(b"Haven", body)
         self.assertIn("default-src 'self'", headers["Content-Security-Policy"])
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
-        for path, ctype in [("/static/app.js", "javascript"), ("/static/styles.css", "text/css"),
+        for path, ctype in [("/static/app.js", "javascript"), ("/static/maps.js", "javascript"), ("/static/haven.css", "text/css"), ("/static/haven-port.css", "text/css"), ("/static/styles.css", "text/css"),
                             ("/sw.js", "javascript"), ("/manifest.webmanifest", "manifest"),
                             ("/static/vendor/leaflet.js", "javascript"), ("/static/icon.svg", "svg")]:
             status, headers, _ = call("GET", path)
@@ -50,7 +51,7 @@ class HandlerTests(unittest.TestCase):
             self.assertIn(ctype, headers["Content-Type"], path)
 
     def test_unversioned_app_assets_are_revalidated(self):
-        for path in ('/static/app.js', '/static/styles.css'):
+        for path in ('/static/app.js', '/static/maps.js', '/static/styles.css'):
             _, headers, _ = call('GET', path)
             self.assertEqual(headers['Cache-Control'], 'no-cache')
 
@@ -60,6 +61,19 @@ class HandlerTests(unittest.TestCase):
         self.assertNotEqual(headers["Referrer-Policy"], "no-referrer")
         self.assertIn(headers["Referrer-Policy"], {"strict-origin-when-cross-origin", "origin", "origin-when-cross-origin"})
         self.assertIn("https://tile.openstreetmap.org", headers["Content-Security-Policy"])
+
+    def test_google_map_configuration_and_nonce_are_served_without_caching(self):
+        with mock.patch.dict(os.environ, {'GOOGLE_MAPS_API_KEY': 'test-browser-key', 'GOOGLE_MAPS_MAP_ID': 'test-map-id'}):
+            _, headers, body = call('GET', '/api/meta')
+            self.assertEqual(json.loads(body)['maps'], {'apiKey': 'test-browser-key', 'mapId': 'test-map-id'})
+            self.assertEqual(headers['Cache-Control'], 'no-store')
+            _, headers, html = call('GET', '/')
+            self.assertNotIn(b'test-browser-key', html)
+            self.assertIn(b'<script nonce=', html)
+            self.assertIn("'strict-dynamic'", headers['Content-Security-Policy'])
+            self.assertIn('https://maps.googleapis.com', headers['Content-Security-Policy'])
+            self.assertNotIn("'unsafe-eval'", headers['Content-Security-Policy'])
+        self.assertEqual(call('GET', '/.env.local')[0], 404)
 
     def test_fonts_are_served_as_binary(self):
         status, headers, body = call("GET", "/static/fonts/overpass-latin-wght-normal.woff2")
