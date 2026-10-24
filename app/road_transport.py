@@ -57,11 +57,11 @@ def _ssl_context():
     context = ssl.create_default_context()
     # python.org installs on macOS can lack their optional OpenSSL CA bundle.
     # Use the OS certificate bundle only when no default roots or custom bundle exist.
-    system_bundle = Path("/etc/ssl/cert.pem")
+    system_bundle = "/etc/ssl/cert.pem"
     if (sys.platform == "darwin" and not os.environ.get("SSL_CERT_FILE")
             and not os.environ.get("SSL_CERT_DIR") and not context.get_ca_certs()
-            and system_bundle.is_file()):
-        context.load_verify_locations(cafile=str(system_bundle))
+            and Path(system_bundle).is_file()):
+        context.load_verify_locations(cafile=system_bundle)
     return context
 
 
