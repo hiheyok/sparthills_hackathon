@@ -8,9 +8,9 @@ Built for SpartHill Hacks 2026, AWS Track. Amazon Bedrock does the language work
 
 ## The persona
 
-**Maria, a family caregiver in San José.** A wildfire warning has just gone out and the power is off. Her father uses insulin that must stay cold. Her baby needs formula and diapers. She has a phone with a weak signal and a few minutes. She does not know which store still has anything, and she does not know what is safe to use instead.
+**Samantha is a family caregiver in San Jose.** She receives a wildfire warning from nearby and the power has gone out. She needs to take care of her baby and lacks the necessities. However, her phone has a weak signal and not that much time. She does not know which store has anything she needs.
 
-(Maria is a composite persona, not a real person.)
+(Samantha is a composite persona, not a real person.)
 
 The critical service is **getting essential supplies to a household during a disruption**. Search engines and map apps return a list of stores. They do not know that a store closes before you arrive, that D batteries sold out across downtown, or that you must not swap baby formula for something else.
 
@@ -116,7 +116,7 @@ The stack also allows the function role `bedrock:ApplyGuardrail` on that one gua
 
 | Rubric item | Where to see it |
 |---|---|
-| Real persona and need (20) | Maria above. Wildfire, insulin and a baby are the first example in the app. |
+| Real persona and need (20) | Samantha above. Wildfire, insulin and a baby are the first example in the app. |
 | Working app (25) | Live URL after `deploy.sh`. Saved plans work offline. Automated backend and browser regression suites. |
 | AWS AI use (20) | Four Bedrock stages (understand, alternatives, briefing, follow-up) via the Converse API, with a model fallback chain, optional Guardrails, and a trace panel ("Under the hood: what Bedrock did", folded away by default) that shows the model, time and tokens for each call. |
 | Understanding what you built (15) | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): what is code, what is the model, and why. |
