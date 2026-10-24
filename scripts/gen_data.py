@@ -400,17 +400,23 @@ def build_stores():
 def ensure_supply_outside_shortage(stores):
     """Key scarce items must still exist somewhere beyond the shortage zone,
     so 'nearest in stock' is a real, far-away answer."""
+    eligible_types = ("supermarket", "bigbox", "hardware", "pharmacy", "convenience")
     for item in GUARANTEED_OUT:
         far = [s for s in stores
                if haversine_km(*EPICENTER, s["lat"], s["lng"]) > SHORTAGE_KM + 1 and s["status"] != "closed"]
         have = [s for s in far if s["inv"].get(item, {}).get("q", 0) > 0]
         need = 3 - len(have)
-        for s in far:
+        # Restock eligible far stores. Prefer ones that already list the item
+        # (just sold out); fall back to stocking it at any eligible store so the
+        # guarantee holds even if too few far stores happen to carry it.
+        candidates = [s for s in far if s["type"] in eligible_types and s not in have]
+        candidates.sort(key=lambda s: item not in s["inv"])  # restock-before-add
+        for s in candidates:
             if need <= 0:
                 break
-            if item in s["inv"] and s["inv"][item]["q"] == 0 and s["type"] in ("supermarket", "bigbox", "hardware", "pharmacy", "convenience"):
-                s["inv"][item]["q"] = random.choice([6, 12, 24])
-                need -= 1
+            s["inv"][item] = {"q": random.choice([6, 12, 24]),
+                              "age": s["inv"].get(item, {}).get("age") or verified_age()}
+            need -= 1
 
 
 def main():

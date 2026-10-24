@@ -11,7 +11,14 @@ const SHELL = [
 ];
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(SHELL)).then(() => self.skipWaiting()));
+  // Cache each shell asset on its own. Cache.addAll is atomic: one missing or
+  // non-2xx asset would reject the whole install and leave the app with no
+  // offline shell. Caching individually keeps whatever did load.
+  e.waitUntil(
+    caches.open(CACHE)
+      .then((c) => Promise.all(SHELL.map((u) => c.add(u).catch(() => {}))))
+      .then(() => self.skipWaiting())
+  );
 });
 
 self.addEventListener('activate', (e) => {

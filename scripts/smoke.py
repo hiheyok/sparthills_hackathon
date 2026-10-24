@@ -38,7 +38,7 @@ def run_local():
     os.environ["AI_MODE"] = "bedrock"
     import handler
     event = {"rawPath": "/api/plan", "requestContext": {"http": {"method": "POST", "sourceIp": "smoke"}},
-             "body": json.dumps(BODY)}
+             "body": json.dumps(BODY), "isBase64Encoded": False}
     r = handler.handler(event, None)
     body = json.loads(r["body"])
     if r["statusCode"] != 200:
@@ -53,6 +53,8 @@ def main():
     args = ap.parse_args()
 
     out = run_remote(args.url) if args.url else run_local()
+    if not isinstance(out, dict) or "traces" not in out or "plan" not in out or "brief" not in out:
+        sys.exit(f"Unexpected response from /api/plan (no plan/brief/traces): {str(out)[:400]}")
     print(f"Request: {TEXT}\n")
     print(f"{'stage':<14}{'handled by':<10}{'model':<48}{'time':>7}  tokens in/out")
     bad = 0

@@ -568,12 +568,17 @@
     const t = e.target.closest('[data-action], [data-report]');
     if (!t) return;
     if (t.dataset.report !== undefined) {
+      if (t.disabled) return;
+      t.disabled = true;
       try {
         await post('/api/report', { store_id: t.dataset.store, item_id: t.dataset.item, status: t.dataset.status });
         t.classList.add('sent');
         t.textContent = 'Sent';
         toast('Thanks. Neighbors will see this for the next 6 hours.');
-      } catch (err) { toast(err.message || 'Could not send that report.'); }
+      } catch (err) {
+        t.disabled = false; // let them try again
+        toast(err.message || 'Could not send that report.');
+      }
       return;
     }
     const act = t.dataset.action;
