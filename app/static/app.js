@@ -147,7 +147,9 @@
     if (!window.L) { el.textContent = 'The map could not load. Directions links still work.'; return null; }
     el.textContent = '';
     el.classList.add('has-map');
-    mapState.map = L.map(el, { zoomControl: true, attributionControl: true }).setView([37.3382, -121.8863], 12);
+    // trackResize is off: Leaflet's own window-resize handler would measure the map while it is hidden. fitMap does
+    // that job (on resize and when the map moves), and only when the map can be seen.
+    mapState.map = L.map(el, { zoomControl: true, attributionControl: true, trackResize: false }).setView([37.3382, -121.8863], 12);
     // OpenStreetMap's tile policy needs a Referer, so send the site origin (and nothing more).
     const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
       maxZoom: 19, referrerPolicy: 'strict-origin-when-cross-origin',
@@ -169,18 +171,31 @@
   const wide = window.matchMedia('(min-width: 980px)');
   function rescueMap() {
     const aside = $('.col-map'), shell = $('.shell');
-    if (aside.parentNode !== shell) shell.appendChild(aside);
+    if (aside && aside.parentNode !== shell) shell.appendChild(aside);
+  }
+  // Put the map where this window width wants it. Safe to repeat.
+  function seatMap() {
+    const aside = $('.col-map'), slot = $('#mapSlot');
+    if (!aside) return;
+    if (!wide.matches && slot) { if (aside.parentNode !== slot) slot.appendChild(aside); } else rescueMap();
   }
   function placeMap() {
-    const aside = $('.col-map'), slot = $('#mapSlot');
-    if (!wide.matches && slot) { if (aside.parentNode !== slot) slot.appendChild(aside); } else rescueMap();
+    seatMap();
     if (mapState.map) setTimeout(fitMap, 60);
   }
   wide.addEventListener('change', placeMap);
   window.addEventListener('resize', () => requestAnimationFrame(fitMap));
 
+  // A map nobody can see has no size. Leaflet clips the whole route away when it measures one, and the route
+  // stays gone until the map is measured again, so a hidden map is never measured.
+  const mapShown = () => !!mapState.map && mapState.map.getContainer().offsetWidth > 0 && mapState.map.getContainer().offsetHeight > 0;
+
   function fitMap() {
     if (!mapState.map) return;
+    // Narrowing the window hides the map (CSS) until it is moved into the plan. The resize and the
+    // media-query change can reach the page in either order, so do not wait for the second one.
+    seatMap();
+    if (!mapShown()) return;
     mapState.map.invalidateSize({ pan: false });
     if (mapState.bounds) mapState.map.fitBounds(mapState.bounds, { padding: [40, 40], maxZoom: mapState.maxZoom, animate: false });
   }
@@ -201,7 +216,7 @@
     L.marker([loc.lat, loc.lng], { icon: pin('pin-you', '', 20), keyboard: false }).addTo(mapState.layer);
     L.circle([loc.lat, loc.lng], { radius: +$('#radius').value * 1000, color: '#0a4da2', weight: 2, dashArray: '6 6', fillOpacity: 0.04 }).addTo(mapState.layer);
     map.setView([loc.lat, loc.lng], 12);
-    setTimeout(() => map.invalidateSize(), 50);
+    setTimeout(() => { if (mapShown()) map.invalidateSize(); }, 50);
   }
   $('#radius').addEventListener('change', showOrigin);
 

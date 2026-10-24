@@ -44,6 +44,22 @@ PAGE_STATE = """() => {
 }"""
 
 
+# Lets a test decide when the page hears about a media-query change (a window crossing a breakpoint).
+HOLD_MEDIA_CHANGES = """(() => {
+  const real = window.matchMedia.bind(window);
+  window.__held = [];
+  window.__holdChanges = false;
+  window.matchMedia = (query) => {
+    const list = real(query);
+    const add = list.addEventListener.bind(list);
+    list.addEventListener = (type, fn, options) => add(type, (event) => {
+      if (type === 'change' && window.__holdChanges) window.__held.push(() => fn(event)); else fn(event);
+    }, options);
+    return list;
+  };
+})();"""
+
+
 def annotation(test, err):
     """A GitHub Actions error annotation for a failed test, carrying the page state and the requests it made.
     The job log is not always at hand (it needs sign-in); annotations show on the pull request and in the API."""
@@ -344,6 +360,25 @@ class BrowserRegressions(unittest.TestCase):
         self.assert_road()
         self.assert_stops_visible()
         self.page.set_viewport_size({'width': 390, 'height': 844})
+        self.assert_road()
+        self.assert_stops_visible()
+
+    def test_route_survives_a_resize_that_arrives_before_the_layout_change(self):
+        # Narrowing the window hides the map where it sits (CSS) until the layout code moves it into the plan.
+        # Whether the resize or the media-query change reaches the page first depends on the browser, and on
+        # Ubuntu runners it was often the resize: measuring the hidden map clipped the whole route away.
+        # Hold the media-query change back so the order is the unlucky one every time.
+        self.page.add_init_script(HOLD_MEDIA_CHANGES)
+        self.load()
+        self.submit()
+        self.assert_road()
+        self.page.evaluate('() => { window.__holdChanges = true; }')
+        self.page.set_viewport_size({'width': 390, 'height': 844})
+        self.page.evaluate('() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(done, 200))))')
+        self.assertGreater(self.page.evaluate('() => window.__held.length'), 0)     # the change really was held back
+        self.assert_road()
+        self.page.evaluate('() => { window.__holdChanges = false; window.__held.splice(0).forEach((deliver) => deliver()); }')
+        expect(self.page.locator('#map')).to_be_visible()
         self.assert_road()
         self.assert_stops_visible()
 
