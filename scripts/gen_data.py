@@ -212,6 +212,24 @@ CAT = {c["id"]: c for c in CATALOG}
 
 
 # ------------------------------------------------------------------ stores
+# Crisis-relief places are added to selected neighborhoods below (build_stores), separate from the
+# retail HOODS list, so free community sources appear alongside stores. A real deployment would pull
+# these from official feeds (211, FEMA, county OES); here they are clearly-labeled demo data.
+RELIEF_SITES = [
+    # (type, name, hood, lat, lng)
+    ("food_bank",      "Second Harvest Food Bank",        "Downtown San José", 37.3360, -121.8900),
+    ("food_bank",      "St. Vincent Food Pantry",         "Alum Rock",         37.3665, -121.8200),
+    ("food_bank",      "Willow Glen Community Pantry",     "Willow Glen",       37.3005, -121.8995),
+    ("shelter",        "Downtown Emergency Shelter",       "Downtown San José", 37.3395, -121.8850),
+    ("shelter",        "Evergreen Red Cross Shelter",      "Evergreen",         37.3175, -121.7815),
+    ("relief_site",    "City Hall Water & Supply Point",   "Downtown San José", 37.3375, -121.8860),
+    ("relief_site",    "Berryessa Distribution Point",     "Berryessa",         37.3805, -121.8640),
+    ("relief_site",    "Santa Clara County POD",           "Santa Clara",       37.3545, -121.9540),
+    ("cooling_center", "MLK Jr. Library Cooling Center",    "Downtown San José", 37.3356, -121.8850),
+    ("cooling_center", "Camden Community Cooling Center",   "Cambrian",          37.2535, -121.9235),
+]
+
+
 HOODS = [
     ("Downtown San José", 37.3382, -121.8863, ["supermarket", "pharmacy", "outdoor", "hardware"]),
     ("SJSU and Naglee Park", 37.3330, -121.8780, ["convenience", "pharmacy", "petstore"]),
@@ -245,6 +263,17 @@ HOURS = {  # (open, close) in minutes after midnight
     "supermarket": (6 * 60, 23 * 60), "pharmacy": (8 * 60, 21 * 60), "hardware": (7 * 60, 20 * 60),
     "bigbox": (6 * 60, 22 * 60), "outdoor": (9 * 60, 20 * 60), "convenience": (6 * 60, 24 * 60),
     "medical": (9 * 60, 18 * 60), "petstore": (9 * 60, 20 * 60),
+    # Crisis-relief places tend to keep long daytime hours; shelters run around the clock.
+    "food_bank": (9 * 60, 19 * 60), "relief_site": (7 * 60, 21 * 60), "cooling_center": (8 * 60, 21 * 60),
+    "shelter": None,  # always open (set below)
+}
+# Human-readable kind shown in the UI, and whether the place is a free community resource.
+RELIEF_TYPES = {"food_bank", "shelter", "relief_site", "cooling_center"}
+PLACE_KIND = {
+    "supermarket": "Store", "pharmacy": "Pharmacy", "hardware": "Store", "bigbox": "Store",
+    "outdoor": "Store", "convenience": "Store", "medical": "Medical supply", "petstore": "Store",
+    "food_bank": "Food bank (free)", "shelter": "Shelter (free)",
+    "relief_site": "Relief distribution (free)", "cooling_center": "Cooling / charging center (free)",
 }
 ALWAYS_OPEN_CHANCE = {"convenience": .5, "pharmacy": .15, "supermarket": .15}
 
@@ -314,6 +343,31 @@ CARRY = {
         **P(1.0, "pet_food"),
         **P(.3, "water_jug"),
     },
+    # Crisis-relief sources. These provide the essentials people most need when retail is sold out.
+    "food_bank": {
+        **P(1.0, "water_bottled food_canned food_bars"),
+        **P(.9, "peanut_butter dried_fruit_nuts baby_food diapers wipes"),
+        **P(.8, "baby_formula_powder electrolyte can_opener toilet_paper feminine_hygiene hand_sanitizer"),
+        **P(.5, "baby_formula_rtf pet_food food_meals"),
+    },
+    "shelter": {
+        **P(1.0, "water_bottled mylar_blanket"),
+        **P(.9, "food_canned food_bars hand_sanitizer toilet_paper first_aid_kit power_bank"),
+        **P(.8, "wipes diapers feminine_hygiene bandages electrolyte sleeping_bag"),
+        **P(.6, "baby_formula_powder hand_warmers n95_mask flashlight_led"),
+    },
+    "relief_site": {
+        **P(1.0, "water_bottled water_jug"),
+        **P(.9, "food_canned food_bars batt_aa batt_d flashlight_led"),
+        **P(.8, "n95_mask tarp mylar_blanket hand_sanitizer ice_bag"),
+        **P(.6, "baby_formula_powder diapers wipes lantern_led_battery power_bank sandbags"),
+    },
+    "cooling_center": {
+        **P(1.0, "water_bottled power_bank"),
+        **P(.9, "electrolyte car_charger extension_cord"),
+        **P(.7, "food_bars hand_sanitizer ice_packs first_aid_kit"),
+        **P(.4, "ice_bag n95_mask"),
+    },
 }
 
 # probability an item is sold out INSIDE the demo shortage zone (panic buying)
@@ -352,6 +406,17 @@ def make_inventory(stype, dist_epi):
         if random.random() > p:
             continue
         inv[item] = {"q": random.choice([1, 2, 3, 4, 6, 8, 12, 18, 24, 36]), "age": verified_age()}
+    # Crisis-relief places are restocked by agencies, so they largely escape the panic-buying
+    # shortage that empties nearby stores -- that is why they matter as a fallback. The exception is
+    # the handful of GUARANTEED_OUT items that everyone rushes first (bottled water, D batteries,
+    # 1 lb propane, infant formula powder): inside the shortage zone even relief points ration those,
+    # so the demo's "nearest stock is far away / needs a substitute" scenario still holds for them.
+    if stype in RELIEF_TYPES:
+        if dist_epi <= GUARANTEED_OUT_KM:
+            for item in GUARANTEED_OUT:
+                if item in inv:
+                    inv[item]["q"] = 0
+        return inv
     for item, rec in inv.items():
         sp = SCARCE.get(item)
         if sp is not None:
@@ -391,9 +456,25 @@ def build_stores():
                 status, note = "limited", LIMITED_NOTES[n % len(LIMITED_NOTES)]
             stores.append({
                 "id": f"s{n:02d}", "name": f"{brand}, {hood}", "type": stype, "hood": hood,
+                "kind": PLACE_KIND.get(stype, "Store"), "free": False,
                 "lat": slat, "lng": slng, "hours": hours, "status": status, "note": note,
                 "inv": make_inventory(stype, dist),
             })
+    # Append crisis-relief places (free community sources), spread across neighborhoods.
+    for stype, name, hood, lat, lng in RELIEF_SITES:
+        n += 1
+        if stype == "shelter":
+            hours = {"always": True}
+        else:
+            o, c = HOURS[stype]
+            hours = {"open": o, "close": c}
+        stores.append({
+            "id": f"s{n:02d}", "name": name, "type": stype, "hood": hood,
+            "kind": PLACE_KIND[stype], "free": True,
+            "lat": round(lat, 5), "lng": round(lng, 5), "hours": hours, "status": "open",
+            "note": "Free community resource. Confirm hours and eligibility before you go.",
+            "inv": make_inventory(stype, haversine_km(*EPICENTER, lat, lng)),
+        })
     return stores
 
 
@@ -430,7 +511,8 @@ def main():
     (OUT / "places.json").write_text(json.dumps(places, indent=1, ensure_ascii=False))
     closed = sum(s["status"] == "closed" for s in stores)
     limited = sum(s["status"] == "limited" for s in stores)
-    print(f"{len(CATALOG)} catalog items, {len(stores)} stores ({closed} closed, {limited} limited)")
+    relief = sum(s.get("free") for s in stores)
+    print(f"{len(CATALOG)} catalog items, {len(stores)} places ({relief} free relief, {closed} closed, {limited} limited)")
     for item in GUARANTEED_OUT:
         total = sum(s["inv"].get(item, {}).get("q", 0) > 0 for s in stores)
         print(f"  {item}: in stock at {total} stores")

@@ -129,6 +129,7 @@ def _store_view(s, dist_km, eta, until, q, age, source, qty_wanted):
     conf = confidence(age)
     return {
         "id": s["id"], "name": s["name"], "type": s["type"], "hood": s["hood"],
+        "kind": s.get("kind", "Store"), "free": bool(s.get("free")),
         "lat": s["lat"], "lng": s["lng"],
         "dist_km": round(dist_km, 1), "eta_min": eta,
         "open_note": until, "store_note": s["note"] if s["status"] == "limited" else "",
@@ -160,9 +161,13 @@ def search_item(item_id, qty, lat, lng, radius_km, now_min, reports, now_ts, lim
             stats["out"] += 1
             continue
         view = _store_view(s, d, eta, until, q, age, source, qty)
-        penalty = {"fresh": 0, "recent": 6, "stale": 20}[view["confidence"]]
-        penalty += 8 if view["short"] else 0
-        penalty += 4 if s["status"] == "limited" else 0
+        # Distance (eta) is the main signal: people want the closest store that actually has it.
+        # Stock freshness, short stock and "limited" status are gentle tie-breakers, scaled so they
+        # only reorder stores that are at a similar distance, never send someone materially farther
+        # for a slightly fresher shelf. (Clearly stale stock still loses to a comparably close store.)
+        penalty = {"fresh": 0, "recent": 2, "stale": 10}[view["confidence"]]
+        penalty += 5 if view["short"] else 0
+        penalty += 2 if s["status"] == "limited" else 0
         view["score"] = eta + penalty
         cands.append(view)
     cands.sort(key=lambda v: (v["score"], v["dist_km"]))
@@ -441,6 +446,7 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4, mode=DEFAULT_MOD
         stops.append({
             "order": idx,
             "store": {"id": sid, "name": s["name"], "type": s["type"], "hood": s["hood"],
+                      "kind": s.get("kind", "Store"), "free": bool(s.get("free")),
                       "lat": s["lat"], "lng": s["lng"],
                       "store_note": s["note"] if s["status"] == "limited" else ""},
             "leg_km": round(leg["km"], 1), "leg_min": leg["min"], "arrive": fmt_clock(leg["arrive"]),

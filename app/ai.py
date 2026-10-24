@@ -380,6 +380,14 @@ UNDERSTAND_SYSTEM = """You are the intake analyst for SupplyLine, a tool people 
 
 Read the person's message and convert it into a structured supply request. The message may be stressed, informal, misspelled, or partly in another language. Read for meaning.
 
+READING THE WORDS (interpret how people actually talk)
+- Brand names and slang map to the generic item: "Pampers" -> diapers, "Tums" -> antacid, "Gatorade"/"Pedialyte" -> electrolyte drink, "LifeStraw" -> water filter, "Jackery" -> power station, "Sterno" -> canned heat fuel, "Advil"/"Tylenol" -> the matching over-the-counter medicine. The CATALOG lists common names under "also called"; use them.
+- Indirect phrasing names a need: "the fridge is getting warm" / "insulin will spoil" -> cooler + ice; "can't boil water" / "water looks dirty" -> water filter or purification tablets; "phones are about to die" / "no way to charge" -> USB power bank; "it's pitch black" -> flashlight/lantern; "the baby is out of" X -> that infant item.
+- Quantity language: "a case" / "a few" -> a small count; "enough for a week" or "4 of us for 3 days" -> estimate a sensible whole number from household size and duration; vague wording with no number -> 1.
+- Negation and what they already have: if they say they already have something, do NOT add it; if they say they do NOT need something, leave it out. "We have water but need food" -> food only.
+- Forgive typos and phonetic spellings ("bateries", "formla", "diaper's"); match to the closest catalog item by meaning.
+- Prefer the most specific correct item. If a word is genuinely ambiguous between two items, pick the more common one for a disaster and, when useful, add the other as an inferred extra.
+
 RULES
 1. Use ONLY item_id values from the CATALOG below. Never invent ids. Anything requested that has no catalog match goes in "unmapped" as plain words.
 2. Include what they ask for AND what they obviously need to make it usable. Mark those extras "inferred": true with a short "why". Examples: insulin that must stay cold during a power outage -> insulated cooler + bagged ice; cans of food with no mention of an opener -> manual can opener; phones to charge with no power -> USB power bank; wildfire smoke -> N95 masks. Be selective: at most 12 needs in total, no padding.
@@ -397,7 +405,7 @@ JSON SHAPE
   "unmapped": ["..."]
 }
 
-CATALOG (item_id | name | what it is for)
+CATALOG (item_id | name | what it is for | also called)
 {{CATALOG}}"""
 
 _catalog_block = None
@@ -406,7 +414,16 @@ _catalog_block = None
 def catalog_block():
     global _catalog_block
     if _catalog_block is None:
-        _catalog_block = "\n".join(f"{c['id']} | {c['name']} | {', '.join(c['tags'])}" for c in CATALOG_LIST)
+        # Give the model the item's purpose (tags) AND the words people actually use for it
+        # (aliases: brand names, slang, misspellings), so free text maps to the right id.
+        lines = []
+        for c in CATALOG_LIST:
+            aliases = ", ".join(c.get("aliases", [])[:10])
+            line = f"{c['id']} | {c['name']} | {', '.join(c['tags'])}"
+            if aliases:
+                line += f" | also called: {aliases}"
+            lines.append(line)
+        _catalog_block = "\n".join(lines)
     return _catalog_block
 
 

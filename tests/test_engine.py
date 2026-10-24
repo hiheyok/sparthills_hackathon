@@ -128,6 +128,20 @@ class EngineTests(unittest.TestCase):
         res = e.search_item("insulin", 999, DOWNTOWN[0], DOWNTOWN[1], 8, MORNING, {}, self.now)
         self.assertEqual(res["status"], "partial")
 
+    def test_nearest_store_wins_over_a_slightly_farther_fresher_one(self):
+        # Stock freshness is only a gentle tie-breaker: a store that is clearly closer and has the
+        # item in stock should be chosen even if a farther store's shelf was checked more recently.
+        def shop(sid, dlat, age):
+            return {"id": sid, "name": sid, "type": "supermarket", "hood": "x",
+                    "lat": DOWNTOWN[0] + dlat, "lng": DOWNTOWN[1], "hours": {"always": True},
+                    "status": "open", "note": "", "inv": {"batt_aa": {"q": 9, "age": age}}}
+        near_recent = shop("near_recent", 0.004, age=120)   # ~0.4 km, stock checked 2 h ago
+        far_fresh = shop("far_fresh", 0.02, age=5)          # ~2.2 km, checked 5 min ago
+        with unittest.mock.patch.object(e, "STORES", [near_recent, far_fresh]):
+            res = e.search_item("batt_aa", 1, *DOWNTOWN, 8, MORNING, {}, self.now)
+        self.assertEqual(res["stores"][0]["id"], "near_recent",
+                         "the clearly-nearer in-stock store should rank first despite slightly older stock")
+
     def plan_for(self, item, qty, reports=None):
         return e.build_plan([need(item, 1, qty)], [], *DOWNTOWN, 8, MORNING, reports or {}, self.now)
 
