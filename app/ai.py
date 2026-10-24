@@ -23,6 +23,7 @@ Design rules (these are what make it an AI *application* rather than a chat box)
     returns a trace saying which model answered, how long it took and how many
     tokens it used; the UI shows it.
 """
+import contextvars
 import json
 import logging
 import os
@@ -40,9 +41,32 @@ DEFAULT_MODELS = [
     "amazon.nova-lite-v1:0",                         # last-resort in-region model
 ]
 
-_client = None
+_client = None           # a fake injected by tests; otherwise real clients are built on demand
+_clients = {}            # whole-second timeout -> boto3 client
 _bad_until = {}          # model id -> unix time when we may try it again
 _creds_bad_until = 0.0   # no credentials: skip Bedrock entirely for a short while
+
+# A Lambda request has a fixed time (29 s here, and API Gateway cuts off at 30 s). Every Bedrock
+# attempt must fit in what is left of it, with a reserve so the rules fallback and the reply
+# can still go out.
+FALLBACK_RESERVE_S = 3.0   # kept free at the end of the request
+MIN_ATTEMPT_S = 5.0        # never start a call, or a JSON repair, with less time than this
+MAX_ATTEMPT_S = 20.0       # longest a single call may take
+_deadline = contextvars.ContextVar("supplyline_deadline", default=None)   # a time.monotonic() value
+
+
+def set_deadline(remaining_s):
+    """Give the current request `remaining_s` seconds in all (the Lambda context's remaining
+    time). None removes the limit, which local runs and tests use."""
+    _deadline.set(None if remaining_s is None
+                  else time.monotonic() + max(0.0, remaining_s - FALLBACK_RESERVE_S))
+
+
+def _time_left(t0, budget_s):
+    """Seconds this stage may still use: its own budget, or the request deadline if that is sooner."""
+    left = budget_s - (time.monotonic() - t0)
+    deadline = _deadline.get()
+    return left if deadline is None else min(left, deadline - time.monotonic())
 
 
 # ------------------------------------------------------------------ config
@@ -69,19 +93,29 @@ def set_client(client):
     """Test hook: inject a fake bedrock-runtime client and reset health memory."""
     global _client, _creds_bad_until
     _client = client
+    _clients.clear()
     _creds_bad_until = 0.0
     _bad_until.clear()
+    set_deadline(None)
 
 
-def _get_client():
-    global _client
-    if _client is None:
+def _get_client(timeout_s=MAX_ATTEMPT_S):
+    """A bedrock-runtime client whose connect and read timeouts together fit in `timeout_s`.
+    The SDK takes timeouts only when a client is built, so clients are kept per whole second.
+    The SDK itself never retries (total_max_attempts=1): the model chain is the retry policy,
+    and a hidden SDK retry would spend time that this module does not count."""
+    if _client is not None:
+        return _client
+    secs = max(1, min(int(MAX_ATTEMPT_S), int(timeout_s)))
+    if secs not in _clients:
         import boto3
         from botocore.config import Config
-        _client = boto3.client(
+        connect = min(3, max(1, secs // 4))
+        _clients[secs] = boto3.client(
             "bedrock-runtime", region_name=region(),
-            config=Config(connect_timeout=3, read_timeout=20, retries={"max_attempts": 1, "mode": "standard"}))
-    return _client
+            config=Config(connect_timeout=connect, read_timeout=max(1, secs - connect),
+                          retries={"total_max_attempts": 1, "mode": "standard"}))
+    return _clients[secs]
 
 
 # ------------------------------------------------------------ small helpers
@@ -137,7 +171,7 @@ def _text_of(resp):
     return "".join(b["text"] for b in blocks if isinstance(b, dict) and "text" in b)
 
 
-def _converse(model, system, messages, max_tokens, temperature):
+def _converse(model, system, messages, max_tokens, temperature, timeout_s=MAX_ATTEMPT_S):
     kw = {
         "modelId": model,
         "system": [{"text": system}],
@@ -148,7 +182,7 @@ def _converse(model, system, messages, max_tokens, temperature):
     if gid:  # optional Amazon Bedrock Guardrails
         kw["guardrailConfig"] = {"guardrailIdentifier": gid,
                                  "guardrailVersion": os.environ.get("GUARDRAIL_VERSION", "DRAFT")}
-    return _get_client().converse(**kw)
+    return _get_client(timeout_s).converse(**kw)
 
 
 def call_model(stage, system, user, parse, max_tokens=1600, temperature=0.2, budget_s=24.0):
@@ -170,12 +204,13 @@ def call_model(stage, system, user, parse, max_tokens=1600, temperature=0.2, bud
             continue
         messages = [{"role": "user", "content": [{"text": user}]}]
         for attempt in (1, 2):
-            if time.monotonic() - t0 > budget_s:
+            left = _time_left(t0, budget_s)
+            if left < MIN_ATTEMPT_S:   # no attempt on any model can finish now: answer from the rules instead
                 tried.append({"model": model, "error": "time budget used up"})
-                break
+                raise AIUnavailable(tried)
             try:
                 calls += 1
-                resp = _converse(model, system, messages, max_tokens, temperature)
+                resp = _converse(model, system, messages, max_tokens, temperature, left)
             except Exception as exc:  # noqa: BLE001 - classify every SDK/network failure
                 kind = _classify(exc)
                 tried.append({"model": model, "error": _short(exc), "kind": kind})

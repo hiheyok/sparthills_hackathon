@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 os.environ["AI_MODE"] = "auto"
@@ -164,6 +165,77 @@ class UnderstandTests(Base):
         ids = {n["item_id"] for n in intent["needs"]}
         self.assertTrue({"insulin", "cooler", "ice_bag", "food_canned", "can_opener", "n95_mask"} <= ids)
         self.assertEqual(intent["disaster"]["type"], "wildfire")
+
+
+class DeadlineTests(Base):
+    """Bedrock attempts must fit in the time the request has left (Lambda: 29 s, API Gateway: 30 s)."""
+
+    @staticmethod
+    def slow_client(clock, seconds, starts=None):
+        class SlowBedrock:
+            def converse(self, **kw):
+                if starts is not None:
+                    starts.append(clock[0])
+                clock[0] += seconds
+                return {"output": {"message": {"content": [{"text": "not JSON"}]}}}
+        return SlowBedrock()
+
+    def test_a_repair_that_cannot_fit_is_not_started(self):
+        clock, starts = [0.0], []
+        ai.set_client(self.slow_client(clock, 20, starts))
+        with mock.patch.object(ai.time, "monotonic", side_effect=lambda: clock[0]):
+            _, trace = ai.understand("I need water")
+        self.assertEqual(starts, [0.0])            # no repair at 20 s and no second model
+        self.assertEqual((trace["mode"], trace["reason"]), ("rules", "time budget used up"))
+        self.assertEqual(clock[0], 20)             # the fallback answered right after the first call
+
+    def test_each_attempt_is_asked_to_finish_inside_the_time_left(self):
+        clock, asked = [0.0], []
+        bedrock = self.slow_client(clock, 9)
+
+        def client_for(timeout_s):
+            asked.append(timeout_s)
+            return bedrock
+        with mock.patch.object(ai, "_get_client", side_effect=client_for), \
+                mock.patch.object(ai.time, "monotonic", side_effect=lambda: clock[0]):
+            ai.understand("I need water")
+        self.assertEqual(asked, [24.0, 15.0, 6.0])  # 24 s stage budget, minus 9 s per call; a 4th call would have -3 s
+
+    def test_request_deadline_reserves_time_for_the_fallback(self):
+        fake = FakeBedrock([INTENT])
+        ai.set_client(fake)
+        ai.set_deadline(7.0)                        # 7 s left in the invocation, minus the 3 s reserve, is under the 5 s minimum
+        _, trace = ai.understand("I need water")
+        self.assertEqual((fake.calls, trace["mode"]), ([], "rules"))
+        ai.set_deadline(40.0)                       # plenty: the 24 s stage budget is the only limit
+        _, trace = ai.understand("I need water")
+        self.assertEqual((len(fake.calls), trace["mode"]), (1, "bedrock"))
+
+    def test_handler_passes_the_lambda_remaining_time_to_the_ai_layer(self):
+        import handler
+
+        class Context:
+            def get_remaining_time_in_millis(self):
+                return 6000
+        seen = []
+        with mock.patch.object(ai, "set_deadline", side_effect=seen.append):
+            handler.handler({"rawPath": "/api/health", "requestContext": {"http": {"method": "GET"}}}, Context())
+        self.assertEqual(seen, [6.0, None])         # set for the request, cleared afterwards
+        fake = FakeBedrock([INTENT])
+        ai.set_client(fake)
+        event = {"rawPath": "/api/understand", "requestContext": {"http": {"method": "POST", "sourceIp": "deadline-test"}},
+                 "body": json.dumps({"text": "I need water and batteries"})}
+        body = json.loads(handler.handler(event, Context())["body"])
+        self.assertEqual((fake.calls, body["trace"]["mode"]), ([], "rules"))   # too little time: no Bedrock call at all
+        self.assertTrue(body["intent"]["needs"])
+
+    @unittest.skipIf(ClientError is None, "botocore not installed")
+    def test_real_client_never_retries_and_times_out_inside_the_time_left(self):
+        ai.set_client(None)
+        for asked in (24.0, 8.4, 5.0):
+            config = ai._get_client(asked).meta.config
+            self.assertEqual(config.retries["total_max_attempts"], 1, asked)   # max_attempts=1 would still allow one retry
+            self.assertLessEqual(config.connect_timeout + config.read_timeout, min(asked, ai.MAX_ATTEMPT_S), asked)
 
 
 class AlternativesTests(Base):
