@@ -7,7 +7,7 @@ Read the lines in quotes in your own words. Do not read them word for word.
 ## Before you record (10 minutes)
 
 1. `bash scripts/deploy.sh`, then `python3 scripts/smoke.py <url>`. It must print `OK`. If it says a stage fell back, fix model access first (README, Troubleshooting) or your video will show the rules fallback instead of Bedrock.
-2. Open the live URL in a browser window sized like a phone or a half screen. Clear the browser's site data for the page (or use a private window) so there is no "saved plan" prompt on the first view.
+2. Open the live URL in a browser window sized like a phone or a half screen. Use a private window for a clean first view without existing saved lists.
 3. Do one full dry run of each example. Model wording changes from run to run, so look at the real result before you talk about it.
 4. Have `docs/architecture.png` open in another tab.
 5. Write your team name and a contact on the last slide or in the video description.
@@ -34,44 +34,47 @@ Say clearly that Samantha is a composite persona and the stores are fictional de
 
 Show `architecture.png`. Point to each box as you name it.
 
-> "One request becomes four stages. The browser calls API Gateway, which invokes one Lambda. The Lambda has two halves. `engine.py` is plain code. It does distance, opening hours at arrival, stock freshness and route planning, because those must be exact and repeatable. `ai.py` calls Amazon Bedrock for the parts that need language and judgment: understanding the request, choosing safe substitutes, and writing the briefing."
+> "The browser calls API Gateway, which invokes one Lambda. We understand the request once, then build driving and walking plans together. `engine.py` checks stock, opening hours, quantities and safety, then chooses pickup stops. `ai.py` calls Bedrock Converse to understand the request, propose substitutes, write briefings and answer questions. Rules fallback runs inside that same Lambda."
 
 > "Bedrock is called through the Converse API with a chain of models: Claude Haiku 4.5 first, then Nova 2 Lite, then Nova Lite. If every model fails, the app still works with a rules fallback, and it says so on screen. Neighbor stock reports go to DynamoDB and expire after six hours. Logs go to CloudWatch."
+
+> "Map display uses Google Maps when configured, otherwise Leaflet with OpenStreetMap tiles. Driving and walking paths come from separate OSRM services through our server. The browser queues those calls, including per-store travel previews. Checklist progress and bookmarked supply lists stay on this device."
 
 > "The key safety idea: the model proposes, code disposes. Every item has a policy. Insulin is never substituted. Propane can only become items on a hand-written safe list. The model cannot override that."
 
 ### 1:40 to 3:40 Live demo
 
-**Example 1: "Wildfire, insulin, baby"** (about 70 seconds)
+**Example 1: Samantha's wildfire request** (about 55 seconds)
 
-Click the chip, then press **Enter** (or click **Find supplies**). Let the progress steps run, since they are real.
+Type: "There is a wildfire warning nearby and the power is out. I need baby formula, diapers, bottled water and canned food for my baby and me." Select Downtown and press **Enter** or **Find supplies**. The homepage chips are Hurricane, Power outage, Flood and Tornado; Samantha's request is entered directly.
 
-* Point at the progress strip under the form: it shows which model handled each step and how long it took.
-* Open "What we understood" (it is folded away): it added things Samantha did not say. Show one marked "Inferred".
-* Point at the route: stops in order, each with drive minutes, "Arrive about" time and an opening-hours note. Check on your dry run whether the insulin-related stop is first, and if it is, say the order is urgency-weighted on purpose.
-* Point at the map: the solid blue line is the fastest road route through the stops, in order, with the drive time and distance below it. The "Turn-by-turn in Google Maps" button opens the whole trip with live traffic. If the map shows a dashed straight line instead, the free routing service was busy: say so and move on.
+* Show the progress strip while the request runs; it hides once the foreground plan finishes. The persistent evidence is in **Under the hood**.
+* Open **Your request** and show the parsed needs. If the result includes an **Inferred** item, explain that the model added it from the situation.
+* Open **Pickup route** for the actual stop order, estimated arrivals and opening labels. Explain that selection favors urgent needs, bundled pickups and place types likely to supply the item; stock and safety checks still apply.
+* Point at the map's road line and **Directions** link. Explain that map pin numbers and the previous/next store browser mean nearest by straight-line distance, while **Pickup route** shows the planned stop sequence. If the line stays dashed, read the routing failure message rather than assuming a cause.
+* Compare Drive and Walk on the store card. Routed distances and times replace labeled estimates when available; these direct-to-store values differ from the whole pickup trip.
 * Point at the data age on a stop ("Checked 20 min ago", or "call ahead" when the data is stale).
 * If any item has a yellow alternative sign, open it and read the caution text.
 
-**Example 3: "Storm outage"** (about 35 seconds)
+**Example 2: Power outage** (about 25 seconds)
 
-D batteries and propane are sold out nearby in the demo data, so this is the best example of alternatives.
+Start a **New request**, click **Power outage**, then submit. This fills the storm request for D batteries and camp-stove propane, which are sold out near downtown in the demo data.
 
 * Show an item with no stock, then the alternative and the reason it does the same job.
 * Say: "The model could only pick from items confirmed in stock near her."
 
-**Example 2: "Earthquake, no water"** (about 25 seconds)
+**Example 3: Gas-smell safety check** (about 20 seconds)
 
-The request mentions a gas smell.
+Start a **New request** and type: "Earthquake. We smell gas in the garage and need bottled water and canned food." Submit it; there is no earthquake chip on the current homepage.
 
 * Show the **call 911** banner. Say: "A keyword safety net does this in code, so it works even if the model misses it."
 
 **Follow-up and neighbor report** (about 20 seconds)
 
-* Type a follow-up such as "Can I use a camping stove indoors?" Read the answer.
-* Open "Tell neighbors what you find here" on a stop and press a button. Say reports expire after 6 hours.
+* Open **Ask about plan**, type a follow-up such as "Can I use a camping stove indoors?", and read the answer and its source. **Run details** shows model evidence when Bedrock answered.
+* Open **Pickup route**, then **Tell neighbors what you find here** on a stop and press a report button. Say reports expire after 6 hours.
 
-Optional if you have time: turn off your network and reload, then press "Open saved plan" to show the last plan working without a connection.
+Optional if you have time: check off a supply, bookmark the list, and reopen it through **My supply lists**. Turn off your network and reload, then choose **Open saved plan** or a bookmarked list to show saved content. The basemap and fresh stock are not downloaded for offline use; restoring a plan does not update inventory.
 
 ### 3:40 to 4:20 Bedrock in use
 
