@@ -50,7 +50,19 @@ class Local(BaseHTTPRequestHandler):
         sys.stderr.write("  %s\n" % (fmt % args))
 
 
+def load_local_settings():
+    """Read map settings without evaluating shell code or overriding exports."""
+    path = ROOT / ".env.local"
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        name, sep, value = line.partition("=")
+        if sep and name.strip() in {"GOOGLE_MAPS_API_KEY", "GOOGLE_MAPS_MAP_ID"}:
+            os.environ.setdefault(name.strip(), value.strip().strip("\"'"))
+
+
 def main():
+    load_local_settings()
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=8080)
     ap.add_argument("--ai", choices=["auto", "bedrock", "off"], default=os.environ.get("AI_MODE", "auto"))

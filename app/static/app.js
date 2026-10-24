@@ -139,32 +139,35 @@
   });
 
   // ------------------------------------------------------------------- map
-  const mapState = { map: null, layer: null, straight: null, token: 0, plan: null, line: null, loading: false, bounds: null, maxZoom: 14, mode: 'driving' };
+  // The map goes through the HavenMaps adapter (maps.js): Google Maps when a key is configured,
+  // otherwise OpenStreetMap/Leaflet. Planning never depends on the map SDK, and a broken or
+  // unauthorized map falls back without blocking the plan, the route list or the saved plan.
+  const mapState = { adapter: null, creating: null, straight: null, token: 0, plan: null, line: null,
+    loading: false, fitPoints: null, maxZoom: 14, mode: 'driving' };
 
-  function ensureMap() {
+  // Create the adapter once. Returns a promise of the adapter, or null if no map backend is available.
+  function ensureMapAsync() {
+    if (mapState.adapter) return Promise.resolve(mapState.adapter);
+    if (mapState.creating) return mapState.creating;
     const el = $('#map');
-    if (mapState.map) return mapState.map;
-    if (!window.L) { el.textContent = 'The map could not load. Directions links still work.'; return null; }
-    el.textContent = '';
+    if (!window.HavenMaps) { el.textContent = 'The map could not load. Directions links still work.'; return Promise.resolve(null); }
     el.classList.add('has-map');
-    // trackResize is off: Leaflet's own window-resize handler would measure the map while it is hidden. fitMap does
-    // that job (on resize and when the map moves), and only when the map can be seen.
-    mapState.map = L.map(el, { zoomControl: true, attributionControl: true, trackResize: false }).setView([37.3382, -121.8863], 12);
-    // OpenStreetMap's tile policy needs a Referer, so send the site origin (and nothing more).
-    const tiles = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19, referrerPolicy: 'strict-origin-when-cross-origin',
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> contributors',
-    }).addTo(mapState.map);
-    let loaded = 0, failed = 0;
+    const maps = (state.meta && state.meta.maps) || {};
     const warn = $('#mapWarn');
-    tiles.on('tileload', () => { loaded++; if (warn) warn.hidden = true; });
-    tiles.on('tileerror', () => {
-      failed++;
-      if (!loaded && failed >= 3 && warn) warn.hidden = false;   // offline or blocked: the route is still drawn
-    });
-    mapState.layer = L.layerGroup().addTo(mapState.map);
-    return mapState.map;
+    mapState.creating = HavenMaps.create(el, { apiKey: maps.apiKey, mapId: maps.mapId }, {
+      onFallback: () => { /* Google failed; Leaflet (OpenStreetMap) is used instead. */ },
+      onTileError: () => { if (warn) warn.hidden = false; },        // offline or blocked: the route is still drawn
+    }).then((adapter) => {
+      mapState.adapter = adapter;
+      if (warn && adapter && adapter.provider === 'google') warn.hidden = true;
+      return adapter;
+    }).catch(() => null).finally(() => { mapState.creating = null; });
+    return mapState.creating;
   }
+
+  // Synchronous accessor for callers that only touch the map when it already exists.
+  const currentAdapter = () => mapState.adapter;
+
 
   // On wide screens the map is a sticky column beside the results. On phones a map at the very
   // bottom of a long page is useless, so it moves up to sit right under the plan summary.
@@ -181,42 +184,42 @@
   }
   function placeMap() {
     seatMap();
-    if (mapState.map) setTimeout(fitMap, 60);
+    if (mapState.adapter) setTimeout(fitMap, 60);
   }
   wide.addEventListener('change', placeMap);
   window.addEventListener('resize', () => requestAnimationFrame(fitMap));
 
-  // A map nobody can see has no size. Leaflet clips the whole route away when it measures one, and the route
-  // stays gone until the map is measured again, so a hidden map is never measured.
-  const mapShown = () => !!mapState.map && mapState.map.getContainer().offsetWidth > 0 && mapState.map.getContainer().offsetHeight > 0;
+  // A map nobody can see has no size. The SDK clips the whole route away when it measures one, and the
+  // route stays gone until the map is measured again, so a hidden map is never measured.
+  const mapEl = () => $('#map');
+  const mapShown = () => { const el = mapEl(); return !!mapState.adapter && !!el && el.offsetWidth > 0 && el.offsetHeight > 0; };
 
   function fitMap() {
-    if (!mapState.map) return;
+    if (!mapState.adapter) return;
     // Narrowing the window hides the map (CSS) until it is moved into the plan. The resize and the
     // media-query change can reach the page in either order, so do not wait for the second one.
     seatMap();
     if (!mapShown()) return;
-    mapState.map.invalidateSize({ pan: false });
-    if (mapState.bounds) mapState.map.fitBounds(mapState.bounds, { padding: [40, 40], maxZoom: mapState.maxZoom, animate: false });
+    mapState.adapter.resize();
+    if (mapState.fitPoints && mapState.fitPoints.length > 1) mapState.adapter.fit(mapState.fitPoints, mapState.maxZoom);
   }
-
-  const pin = (cls, html, size) => L.divIcon({ className: `pin ${cls}`, html, iconSize: [size, size], iconAnchor: [size / 2, size / 2] });
 
   function showOrigin() {
     // Form edits describe the next search; the map still belongs to the displayed plan.
     if (mapState.plan) return;
     const loc = currentLoc();
-    const map = ensureMap();
-    if (!map || !loc) return;
-    mapState.token++;                               // a road route still loading belongs to the old view
-    mapState.bounds = null;
-    $('#mapLink').hidden = true;
-    $('#mapNote').textContent = 'Pick where you are and your route appears here.';
-    mapState.layer.clearLayers();
-    L.marker([loc.lat, loc.lng], { icon: pin('pin-you', '', 20), keyboard: false }).addTo(mapState.layer);
-    L.circle([loc.lat, loc.lng], { radius: +$('#radius').value * 1000, color: '#0a4da2', weight: 2, dashArray: '6 6', fillOpacity: 0.04 }).addTo(mapState.layer);
-    map.setView([loc.lat, loc.lng], 12);
-    setTimeout(() => { if (mapShown()) map.invalidateSize(); }, 50);
+    if (!loc) return;
+    ensureMapAsync().then((adapter) => {
+      if (!adapter || mapState.plan) return;
+      mapState.token++;                               // a road route still loading belongs to the old view
+      mapState.fitPoints = null;
+      $('#mapLink').hidden = true;
+      $('#mapNote').textContent = 'Pick where you are and your route appears here.';
+      adapter.clear();
+      adapter.marker([loc.lat, loc.lng], { kind: 'pin-you' });
+      adapter.setView([loc.lat, loc.lng], 12);
+      setTimeout(() => { if (mapShown()) adapter.resize(); }, 50);
+    });
   }
   $('#radius').addEventListener('change', showOrigin);
 
@@ -291,7 +294,8 @@
     let road = validRoad(lane.road) ? lane.road : null;
     let failure = lane.roadFailure || 'Road directions are unavailable right now.';
     if (!road) ({ road, failure } = await requestRoad(lane, plan, state.runId));
-    if (token !== mapState.token || !mapState.map) return;     // a newer search replaced this plan
+    const adapter = currentAdapter();
+    if (token !== mapState.token || !adapter) return;          // a newer search replaced this plan
     mapState.loading = false;
     const note = $('#mapNote');
     if (!road) {
@@ -299,11 +303,11 @@
       prefetchRoads(state.runId);
       return;
     }
-    L.polyline(road.path, { color: '#ffffff', weight: 10, opacity: 0.9, lineJoin: 'round', smoothFactor: 0 }).addTo(mapState.layer);
-    const drawn = L.polyline(road.path, { color: style.color, weight: 5, opacity: 0.95, lineJoin: 'round', lineCap: 'round',
-      smoothFactor: 0, ...(style.dash ? { dashArray: style.dash } : {}) }).addTo(mapState.layer);
-    if (mapState.straight) mapState.layer.removeLayer(mapState.straight);
-    mapState.bounds = drawn.getBounds().extend(L.latLngBounds(line));
+    // White casing under the coloured route so it reads over any basemap.
+    adapter.line(road.path, { color: '#ffffff', weight: 10 });
+    adapter.line(road.path, { color: style.color, weight: 5, dashed: !!style.dash });
+    if (mapState.straight) { mapState.straight.remove(); mapState.straight = null; }
+    mapState.fitPoints = road.path.concat(line);
     mapState.maxZoom = 15;
     fitMap();
     // The routing services ask to see the OpenStreetMap credit and a link for fixing the map wherever their routes are shown.
@@ -312,39 +316,41 @@
     prefetchRoads(state.runId);
   }
 
-  function drawRoute(plan, lane) {
-    const map = ensureMap();
+  async function drawRoute(plan, lane) {
     const loc = plan.location;
     const color = ROAD_STYLE[modeOf(plan)].color;
-    if (!map) return;
+    const adapter = await ensureMapAsync();
+    if (!adapter) return;
+    // If a newer selection replaced the plan while the adapter was being created the first time,
+    // the lane now on screen no longer points at this plan: leave the screen to whoever owns it.
+    const shown = state.lanes[state.mode];
+    if (shown && shown.result && shown.result.plan !== plan) return;
     mapState.token++;
     mapState.plan = plan;
     mapState.mode = modeOf(plan);
-    mapState.layer.clearLayers();
+    adapter.clear();
     const bounds = [[loc.lat, loc.lng]];
-    L.circle([loc.lat, loc.lng], { radius: loc.radius_km * 1000, color, weight: 2, dashArray: '6 6', fillOpacity: 0.04 }).addTo(mapState.layer);
     const inRoute = new Set(plan.route.stops.map((s) => s.store.id));
     const seen = new Set();
     plan.results.forEach((r) => r.stores.forEach((s) => {
       if (inRoute.has(s.id) || seen.has(s.id)) return;
       seen.add(s.id);
-      L.marker([s.lat, s.lng], { icon: pin('pin-alt', '', 12), title: s.name, keyboard: false }).addTo(mapState.layer);
+      adapter.marker([s.lat, s.lng], { kind: 'pin-alt', title: s.name });
     }));
     const line = [[loc.lat, loc.lng]];
     mapState.line = line;
     plan.route.stops.forEach((s) => {
       line.push([s.store.lat, s.store.lng]);
       bounds.push([s.store.lat, s.store.lng]);
-      L.marker([s.store.lat, s.store.lng], { icon: pin('', String(s.order), 34), title: s.store.name, keyboard: false })
-        .bindTooltip(`${s.order}. ${esc(s.store.name)}`, { direction: 'top', offset: [0, -14] }).addTo(mapState.layer);
+      adapter.marker([s.store.lat, s.store.lng], { label: String(s.order), title: `${s.order}. ${s.store.name}` });
     });
     mapState.straight = line.length > 1
-      ? L.polyline(line, { color, weight: 4, opacity: 0.8, dashArray: '8 8' }).addTo(mapState.layer) : null;
-    L.marker([loc.lat, loc.lng], { icon: pin('pin-you', '', 20), keyboard: false }).addTo(mapState.layer);
-    mapState.bounds = bounds.length > 1 ? L.latLngBounds(bounds) : null;
+      ? adapter.line(line, { color, weight: 4, dashed: true }) : null;
+    adapter.marker([loc.lat, loc.lng], { kind: 'pin-you' });
+    mapState.fitPoints = bounds.length > 1 ? bounds : null;
     mapState.maxZoom = 14;
     fitMap();
-    if (bounds.length === 1) map.setView([loc.lat, loc.lng], 12);
+    if (bounds.length === 1) adapter.setView([loc.lat, loc.lng], 12);
     const link = $('#mapLink');
     if (plan.route.stops.length) {
       link.href = googleRouteUrl(plan);

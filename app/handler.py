@@ -10,7 +10,9 @@ import contextvars
 import json
 import logging
 import math
+import os
 import re
+import secrets
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -34,9 +36,14 @@ CONTENT_TYPES = {
     ".woff2": "font/woff2", ".png": "image/png", ".txt": "text/plain; charset=utf-8",
 }
 BINARY = {".woff2", ".png"}
-CSP = ("default-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org; "
-       "style-src 'self' 'unsafe-inline'; script-src 'self'; font-src 'self'; connect-src 'self'; "
-       "manifest-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+CSP = ("default-src 'self'; img-src 'self' data: blob: https://tile.openstreetmap.org "
+       "https://*.googleapis.com https://*.gstatic.com https://*.google.com https://*.googleusercontent.com; "
+       "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+       "script-src 'self' https://maps.googleapis.com https://maps.gstatic.com; "
+       "font-src 'self' https://fonts.gstatic.com; "
+       "connect-src 'self' https://*.googleapis.com https://*.google.com https://*.gstatic.com data: blob:; "
+       "frame-src https://*.google.com; manifest-src 'self'; worker-src 'self' blob:; "
+       "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 SECURITY_HEADERS = {
     "X-Content-Type-Options": "nosniff", "Referrer-Policy": "strict-origin-when-cross-origin",  # OpenStreetMap blocks tile requests that carry no Referer
     "Permissions-Policy": "geolocation=(self), camera=(), microphone=()",
@@ -164,6 +171,9 @@ def api_meta(_d):
         "catalog": [{"id": c["id"], "name": c["name"], "category": c["category"]} for c in CATALOG_LIST],
         "ai": ai.status(),
         "travel": {"modes": list(MODES), "walk_max_km": WALK_MAX_KM},
+        # Maps JavaScript keys are browser credentials; restrict them by website in Google Cloud.
+        "maps": {"apiKey": os.environ.get("GOOGLE_MAPS_API_KEY", "").strip(),
+                 "mapId": os.environ.get("GOOGLE_MAPS_MAP_ID", "DEMO_MAP_ID").strip() or "DEMO_MAP_ID"},
         "data": {"stores": len(STORES), "demo": True,
                  "note": "Stores, addresses and inventory are fictional demo data."},
     }
@@ -350,7 +360,7 @@ POST_ROUTES = {
 GET_ROUTES = {"/api/meta": api_meta, "/api/health": api_health}
 STATIC_ALIASES = {"/": "index.html", "/index.html": "index.html", "/sw.js": "sw.js",
                   "/manifest.webmanifest": "manifest.webmanifest"}
-NO_CACHE = {"index.html", "sw.js", "manifest.webmanifest", "app.js", "styles.css"}
+NO_CACHE = {"index.html", "sw.js", "manifest.webmanifest", "app.js", "styles.css", "maps.js"}
 
 
 def _static(path):
@@ -371,7 +381,15 @@ def _static(path):
     cache = "no-cache" if rel in NO_CACHE else "public, max-age=86400"
     if f.suffix in BINARY:
         return _resp(200, f.read_bytes(), ctype, cache, binary=True)
-    return _resp(200, f.read_text(encoding="utf-8"), ctype, cache)
+    text = f.read_text(encoding="utf-8")
+    response = _resp(200, text, ctype, cache)
+    if rel == "index.html":
+        nonce = secrets.token_urlsafe(24)
+        response["body"] = text.replace("<script ", f'<script nonce="{nonce}" ').replace(
+            "</head>", f'<style nonce="{nonce}"></style>\n</head>')
+        response["headers"]["Content-Security-Policy"] = CSP.replace(
+            "script-src 'self'", f"script-src 'self' 'nonce-{nonce}' 'strict-dynamic'")
+    return response
 
 
 def handler(event, context=None):
