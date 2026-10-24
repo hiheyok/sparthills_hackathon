@@ -8,7 +8,7 @@ Built for SpartHill Hacks 2026, AWS Track. Amazon Bedrock does the language work
 
 ## The persona
 
-**Samantha, a family caregiver in San José.** A wildfire warning has just gone out and the power is off. Her father uses insulin that must stay cold. Her baby needs formula and diapers. She has a phone with a weak signal and a few minutes. She does not know which store still has anything, and she does not know what is safe to use instead.
+**Samantha is a family caregiver in San Jose.** She receives a wildfire warning from nearby and the power has gone out. She needs to take care of her baby and lacks the necessities. However, her phone has a weak signal and not that much time. She does not know which store has anything she needs.
 
 (Samantha is a composite persona, not a real person.)
 

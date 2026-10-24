@@ -26,7 +26,7 @@ Read the lines in quotes in your own words. Do not read them word for word.
 
 Show the app's first screen.
 
-> "This is Samantha. A wildfire warning just went out in San José and her power is off. Her dad uses insulin that has to stay cold, and her baby needs formula. She has a weak signal and a few minutes. Search gives her a list of stores. It does not tell her that one closes before she gets there, that D batteries are sold out downtown, or that she must never swap baby formula for something else. SupplyLine does."
+> "Samantha is a family caregiver in San Jose. She receives a wildfire warning from nearby and the power has gone out. She needs to take care of her baby and lacks the necessities. However, her phone has a weak signal and not that much time. She does not know which store has anything she needs."
 
 Say clearly that Samantha is a composite persona and the stores are fictional demo data.
 
