@@ -54,6 +54,7 @@ SHOPPING_MIN = 8           # time spent inside each stop
 PRIORITY_WEIGHT = {1: 5, 2: 3, 3: 1}      # how much covering an item is worth when choosing stops
 URGENCY_WEIGHT = {1: 3.0, 2: 1.0, 3: 0.0}  # how much waiting for an item hurts when ordering stops
 BUNDLE_BONUS = 0.6         # per extra distinct item a store covers: reward one-stop bundling
+RELIEF_PENALTY = 10        # extra "minutes" added to free relief places so real stores rank first
 
 
 # ---------------------------------------------------------------- time
@@ -168,6 +169,12 @@ def search_item(item_id, qty, lat, lng, radius_km, now_min, reports, now_ts, lim
         penalty = {"fresh": 0, "recent": 2, "stale": 10}[view["confidence"]]
         penalty += 5 if view["short"] else 0
         penalty += 2 if s["status"] == "limited" else 0
+        # Prefer actual stores (markets, convenience, pharmacies, hardware, big-box) as the first
+        # choice: their stock is deeper and more reliable. Free relief places (shelters, food banks,
+        # distribution and cooling centers) stay in the results as a fallback and still win when they
+        # are clearly the closest or the only source, but a store that is within this many extra
+        # minutes is ranked ahead of them.
+        penalty += RELIEF_PENALTY if s.get("free") else 0
         view["score"] = eta + penalty
         cands.append(view)
     cands.sort(key=lambda v: (v["score"], v["dist_km"]))
@@ -372,13 +379,16 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4, mode=DEFAULT_MOD
                 # It never overrides stock, hours or safety (those already shaped `covered`); it only
                 # breaks the tie between a near one-item store and a slightly farther all-in-one store.
                 gain *= 1.0 + BUNDLE_BONUS * (len(covered) - 1)
+                # Prefer routing to a real store over a free relief place, unless the relief place is
+                # clearly closer: treat relief stops as a little farther when weighing them.
+                relief_cost = RELIEF_PENALTY if STORE_BY_ID[sid].get("free") else 0
                 for pos in range(len(order) + 1):
                     cand = order[:pos] + [sid] + order[pos:]
                     legs = _simulate(cand, lat, lng, now_min, reports, mode)
                     if legs is None:
                         continue
                     added = sum(l["min"] for l in legs) - base_min + SHOPPING_MIN
-                    value = gain / (added + 6.0)
+                    value = gain / (added + relief_cost + 6.0)
                     if best is None or value > best[0]:
                         best = (value, cand, sid)
             if best is None:

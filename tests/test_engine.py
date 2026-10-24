@@ -50,6 +50,18 @@ class EngineTests(unittest.TestCase):
         self.assertIsNotNone(near)
         self.assertGreater(near["dist_km"], 8)
 
+    def test_real_stores_rank_ahead_of_free_relief_places_but_relief_stays_a_fallback(self):
+        # Canned food is stocked by both stores and a nearby food bank. A real store should be the
+        # top result (deeper, more reliable stock); relief places still appear below as a fallback.
+        r = self.search("food_canned")
+        self.assertFalse(e.STORE_BY_ID[r["stores"][0]["id"]].get("free"),
+                         "the first result for an item stores carry should be a real store, not a relief site")
+        self.assertTrue(any(e.STORE_BY_ID[s["id"]].get("free") for s in r["stores"]),
+                        "relief places should still be offered as a fallback")
+        # When downtown stores are sold out (water in the shortage zone), relief is correctly the
+        # closest source and may lead.
+        self.assertTrue(any(e.STORE_BY_ID[s["id"]].get("free") for s in self.search("water_bottled")["stores"]))
+
     def test_open_state_boundaries(self):
         store = {"status": "open", "note": "", "hours": {"open": 8 * 60, "close": 21 * 60}}
         self.assertFalse(e.open_state(store, 7 * 60 + 59)[0])
