@@ -1,9 +1,9 @@
 /* Offline app shell. Network first (so updates arrive), cache fallback (so the
    app and the last saved plan still open with no signal). API calls are never
    cached: stock data must not be served stale by accident. */
-const CACHE = 'supplyline-shell-v11';
+const CACHE = 'supplyline-shell-v12';
 const CORE = [
-  '/', '/static/styles.css?v=11', '/static/maps.js?v=11', '/static/app.js?v=11',
+  '/', '/static/styles.css?v=12', '/static/maps.js?v=12', '/static/app.js?v=12',
   '/static/vendor/leaflet.js', '/static/vendor/leaflet.css',
 ];
 const OPTIONAL = [

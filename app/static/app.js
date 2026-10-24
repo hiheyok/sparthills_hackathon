@@ -612,12 +612,16 @@
     safeStore.set(SAVE_KEY, state.last);
   }
 
+  // A small three-dot "thinking" animation. Keeps a screen-reader word so the state is announced
+  // and so tests can tell a building lane from a ready one.
+  const DOTS = '<span class="dots" role="status" aria-label="working"><span class="sr">working</span><i></i><i></i><i></i></span>';
+
   function laneSummary(m) {
     const l = laneOf(m);
-    if (!l || l.status === 'working') return 'working...';
-    if (l.status === 'error') return 'unavailable';
+    if (!l || l.status === 'working') return DOTS;
+    if (l.status === 'error') return esc('unavailable');
     const route = l.result.plan.route, n = route.stops.length;
-    return n ? `${fmtMin(route.total_travel_min ?? route.total_drive_min)}, ${n} stop${n > 1 ? 's' : ''}` : 'nothing in range';
+    return esc(n ? `${fmtMin(route.total_travel_min ?? route.total_drive_min)}, ${n} stop${n > 1 ? 's' : ''}` : 'nothing in range');
   }
 
   function renderModeSwitch() {
@@ -625,7 +629,7 @@
     if (!Object.keys(state.lanes).length) { el.innerHTML = ''; return; }
     el.innerHTML = `<div class="mode-switch" role="group" aria-label="How are you getting there">${Object.keys(MODES).map((m) =>
       `<button type="button" class="mode-btn" data-action="mode" data-mode="${m}" aria-pressed="${state.mode === m}">
-        <span class="mode-name">${MODES[m].label}</span><span class="mode-sub">${esc(laneSummary(m))}</span></button>`).join('')}</div>`;
+        <span class="mode-name">${MODES[m].label}</span><span class="mode-sub">${laneSummary(m)}</span></button>`).join('')}</div>`;
   }
 
   // Put the chosen lane on screen: its plan, substitutes, store lists and path.
@@ -652,7 +656,7 @@
     $('#r-plan').classList.remove('reveal');
     $('#r-plan').innerHTML = lane.status === 'error'
       ? `<p class="lede">${esc(lane.error || `The ${word} plan could not be built.`)}</p><button type="button" class="btn-quiet" data-action="retry-lane" data-mode="${state.mode}">Try the ${word} plan again</button>`
-      : `<p class="lede">Building your ${word} plan...</p>`;
+      : `<p class="lede">Building your ${word} plan ${DOTS}</p>`;
   }
 
   function setMode(m) {
@@ -774,7 +778,7 @@
         setStep('alternatives', 'skipped');
       }
 
-      if (state.mode === fg) $('#r-plan').innerHTML = `<p class="lede">Building your ${MODES[fg].ing} route...</p>`;
+      if (state.mode === fg) $('#r-plan').innerHTML = `<p class="lede">Building your ${MODES[fg].ing} route ${DOTS}</p>`;
       setStep('brief', 'active');
       const b = await post('/api/brief', { ...base, mode: fg, intent: u.intent, alternatives: alts });
       state.traces.push(b.trace);
