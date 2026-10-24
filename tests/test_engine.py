@@ -37,12 +37,16 @@ class EngineTests(unittest.TestCase):
                 self.assertTrue(c["escalate"], f"{c['id']} needs escalation guidance")
 
     def test_shortage_zone_creates_gaps_downtown_but_not_in_almaden(self):
-        for item in ("water_bottled", "batt_d", "propane_1lb", "baby_formula_powder"):
+        # The panic-bought items still gap at downtown STORES. Water is the exception: relief water
+        # points keep it, so a downtown water search now finds a nearby free source instead of nothing.
+        for item in ("batt_d", "propane_1lb", "baby_formula_powder"):
             self.assertEqual(self.search(item)["status"], "gap", item)
-        self.assertNotEqual(self.search("water_bottled", ALMADEN)["status"], "gap")
+        self.assertEqual(self.search("water_bottled")["status"], "found")   # covered by a relief water point
+        self.assertTrue(any(s["free"] for s in self.search("water_bottled")["stores"]))
+        self.assertNotEqual(self.search("baby_formula_powder", ALMADEN)["status"], "gap")
 
     def test_gap_reports_nearest_available_store_elsewhere(self):
-        near = e.nearest_available("water_bottled", DOWNTOWN[0], DOWNTOWN[1], MORNING, {}, self.now)
+        near = e.nearest_available("baby_formula_powder", DOWNTOWN[0], DOWNTOWN[1], MORNING, {}, self.now)
         self.assertIsNotNone(near)
         self.assertGreater(near["dist_km"], 8)
 
@@ -73,19 +77,19 @@ class EngineTests(unittest.TestCase):
         self.assertNotIn(top, [s["id"] for s in after["stores"]])
 
     def test_newer_report_overrides_older_snapshot_and_older_report_does_not(self):
-        gap = self.search("water_bottled")
+        gap = self.search("batt_d")
         self.assertEqual(gap["status"], "gap")
-        sid = next(s["id"] for s in e.STORES if "water_bottled" in s["inv"] and s["status"] != "closed"
+        sid = next(s["id"] for s in e.STORES if "batt_d" in s["inv"] and s["status"] != "closed"
                    and s["hours"].get("always"))
-        fresh = {(sid, "water_bottled"): {"status": "in_stock", "ts": self.now - 60}}
-        found = e.search_item("water_bottled", 1, e.STORE_BY_ID[sid]["lat"], e.STORE_BY_ID[sid]["lng"], 1.0,
+        fresh = {(sid, "batt_d"): {"status": "in_stock", "ts": self.now - 60}}
+        found = e.search_item("batt_d", 1, e.STORE_BY_ID[sid]["lat"], e.STORE_BY_ID[sid]["lng"], 1.0,
                               MORNING, fresh, self.now)
         self.assertEqual(found["status"], "found")
         self.assertEqual(found["stores"][0]["source"], "community")
         # a report older than the snapshot must not override it
-        age = e.STORE_BY_ID[sid]["inv"]["water_bottled"]["age"]
-        stale = {(sid, "water_bottled"): {"status": "in_stock", "ts": self.now - (age + 600) * 60}}
-        res = e.stock_of(e.STORE_BY_ID[sid], "water_bottled", stale, self.now)
+        age = e.STORE_BY_ID[sid]["inv"]["batt_d"]["age"]
+        stale = {(sid, "batt_d"): {"status": "in_stock", "ts": self.now - (age + 600) * 60}}
+        res = e.stock_of(e.STORE_BY_ID[sid], "batt_d", stale, self.now)
         self.assertEqual(res[2], "snapshot")
 
     def test_unexpired_report_stays_authoritative_while_time_passes(self):
@@ -208,7 +212,10 @@ class EngineTests(unittest.TestCase):
         alts = [{"for_item": "water_bottled", "verdict": "substitutes_available", "no_purchase_tips": [],
                  "escalate": None,
                  "options": [{"item_id": "water_filter", "fit": "strong", "why": "x", "how_to_use": "y", "caution": ""}]}]
-        plan = e.build_plan([need("water_bottled", 1)], alts, *DOWNTOWN, 8, MORNING, {}, self.now)
+        # Relief water points now keep bottled water downtown, so force it out everywhere to create
+        # the gap this test needs and exercise the substitute swap deterministically.
+        reports = {(s["id"], "water_bottled"): {"status": "out", "ts": self.now} for s in e.STORES}
+        plan = e.build_plan([need("water_bottled", 1)], alts, *DOWNTOWN, 8, MORNING, reports, self.now)
         items = [i for s in plan["route"]["stops"] for i in s["items"]]
         self.assertEqual(len(items), 1)
         self.assertTrue(items[0]["is_alt"])
