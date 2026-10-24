@@ -500,3 +500,108 @@ dialog::backdrop { background: #20212466; backdrop-filter: blur(3px); }
 .place-kind { display: inline-block; font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 20px;
   background: #ece7ea; color: #6b5560; vertical-align: middle; white-space: nowrap; }
 .place-kind.free { background: var(--ok-tint); color: var(--ok); }
+
+/* ============================================================
+   Haven landing hero: an animated map that drops a pin, pulses,
+   and reveals a sample stock card. Decorative only (aria-hidden),
+   no JS, scoped to .hero-top so it cannot touch the working app.
+   Ported from the Haven design. Uses --maroon/--paper aliases.
+   ============================================================ */
+.hero { --maroon: var(--route); --paper: var(--surface); }
+.hero-top { display: grid; grid-template-columns: 1.3fr 1fr; align-items: center; gap: 28px; margin-bottom: 8px; }
+.hero-copy { min-width: 0; }
+.hero-art { height: 240px; position: relative; max-width: 360px; width: 100%; justify-self: end; isolation: isolate;
+  --hero-pin-x: 50%; --hero-pin-y: 40%; --hero-animation-duration: 4.8s; --hero-cursor-start-x: 78px; --hero-cursor-start-y: 66px; }
+.hero-map { position: absolute; inset: 8px 30px 18px 32px; overflow: hidden; border-radius: 150px 150px 60px 60px;
+  transform: rotate(-6deg); background: #f1eee7; box-shadow: inset 0 0 0 1px #ece6db; }
+.hero-map::after { content: ''; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(180deg, #faf9f621 40%, #faf9f6b8 100%); }
+.map-drawing { width: 100%; height: 100%; display: block; position: absolute; inset: 0; }
+.hero-map .map-drawing { opacity: .75; }
+.art-orbit { position: absolute; inset: 7px -3px 5px 0; border: 1px solid #e5ded4; border-radius: 50%; transform: rotate(-19deg); }
+.art-orbit.two { inset: 34px -12px 40px -16px; transform: rotate(25deg); border-color: #ebe3d8; }
+.art-map-pin { color: var(--paper); position: absolute; border-radius: 50%; background: var(--maroon);
+  width: 43px; height: 43px; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 10px #6c36491a; z-index: 1; border: 4px solid #fffdf9; }
+.art-map-pin.b { width: 34px; height: 34px; top: 40px; left: 22%; background: #b58d95; }
+.art-map-pin.c { width: 34px; height: 34px; top: 150px; right: 34px; background: #b58d95; }
+.art-you { position: absolute; width: 20px; height: 20px; border-radius: 50%; border: 5px solid #f7fbf5;
+  background: #6b8d77; bottom: 38px; left: 32%; box-shadow: 0 0 0 6px #7fa58c22; z-index: 1; }
+.hero-art .art-map-pin.hero-target { left: var(--hero-pin-x); top: var(--hero-pin-y); width: 43px; height: 43px;
+  transform: translate(-50%, -50%); z-index: 3; animation: hero-pin-click var(--hero-animation-duration) ease-in-out 1 forwards; }
+.hero-click-ring { position: absolute; left: var(--hero-pin-x); top: var(--hero-pin-y); width: 48px; height: 48px;
+  border: 2px solid #a26276; border-radius: 50%; z-index: 2; pointer-events: none; opacity: 0;
+  transform: translate(-50%, -50%) scale(.55); animation: hero-click-wave var(--hero-animation-duration) ease-out 1 forwards; }
+.hero-demo-cursor { position: absolute; left: var(--hero-pin-x); top: var(--hero-pin-y); width: 28px; height: 34px;
+  z-index: 6; pointer-events: none; filter: drop-shadow(0 2px 3px #4e24332c); transform-origin: 3px 2px; opacity: 0;
+  animation: hero-cursor-click var(--hero-animation-duration) ease-in-out 1 forwards; }
+.hero-stock-preview { position: absolute; top: calc(var(--hero-pin-y) + 29px); left: calc(var(--hero-pin-x) - 84px);
+  width: 168px; padding: 9px 10px 4px; border: 1px solid #e3d6d5; background: #fffefa; border-radius: 9px;
+  box-shadow: 0 10px 24px #52253613; z-index: 5; pointer-events: none; opacity: 0;
+  transform: translateY(9px) scale(.97); transform-origin: 50% 0;
+  animation: hero-stock-reveal var(--hero-animation-duration) ease-in-out 1 forwards; }
+.hero-stock-preview::before { content: ''; position: absolute; left: calc(50% - 5px); top: -6px; width: 10px; height: 10px;
+  background: #fffefa; border-left: 1px solid #e3d6d5; border-top: 1px solid #e3d6d5; transform: rotate(45deg); }
+.hero-stock-heading { display: flex; align-items: center; justify-content: space-between; gap: 5px; padding-bottom: 7px;
+  border-bottom: 1px solid #eee5e1; font-size: 10px; font-weight: 600; color: var(--maroon); }
+.hero-stock-heading small { font-size: 7px; font-weight: 500; letter-spacing: .1px; padding: 3px 4px; background: #f2eae5; color: #a18d7a; border-radius: 3px; }
+.hero-stock-row { display: flex; align-items: center; justify-content: space-between; gap: 6px; min-height: 24px; font-size: 9px; color: #8c7c74; }
+.hero-stock-row > b { font-size: 9px; font-weight: 500; color: #6c8975; white-space: nowrap; }
+@keyframes hero-cursor-click {
+  0%, 5% { opacity: 0; transform: translate(var(--hero-cursor-start-x), var(--hero-cursor-start-y)) scale(1); }
+  10% { opacity: 1; transform: translate(var(--hero-cursor-start-x), var(--hero-cursor-start-y)) scale(1); }
+  25%, 27% { opacity: 1; transform: translate(-2px, -2px) scale(1); }
+  30% { opacity: 1; transform: translate(-2px, -2px) scale(.82); }
+  34% { opacity: 1; transform: translate(-2px, -2px) scale(1); }
+  45%, 76% { opacity: 1; transform: translate(27px, 18px) scale(1); }
+  84% { opacity: 0; transform: translate(38px, 28px) scale(1); }
+  100% { opacity: 0; transform: translate(var(--hero-cursor-start-x), var(--hero-cursor-start-y)) scale(1); }
+}
+@keyframes hero-pin-click {
+  0%, 27%, 35%, 100% { transform: translate(-50%, -50%) scale(1); box-shadow: 0 4px 10px #6c36491a; }
+  30% { transform: translate(-50%, -50%) scale(.88); box-shadow: 0 2px 5px #6c364925; }
+  33% { transform: translate(-50%, -50%) scale(1.09); box-shadow: 0 4px 10px #6c36491a; }
+}
+@keyframes hero-click-wave {
+  0%, 28% { opacity: 0; transform: translate(-50%, -50%) scale(.55); }
+  30% { opacity: .55; transform: translate(-50%, -50%) scale(.65); }
+  42% { opacity: 0; transform: translate(-50%, -50%) scale(1.65); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(1.65); }
+}
+@keyframes hero-stock-reveal {
+  0%, 32% { opacity: 0; transform: translateY(9px) scale(.97); }
+  39%, 100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+/* Results slide in when a plan appears (ported Haven reveal). */
+#results:not([hidden]) { animation: revealPlan .45s ease both; }
+.col-map.has-map { animation: revealMap .6s ease both; }
+@keyframes revealPlan { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes revealMap { from { opacity: 0; transform: translateX(16px); } to { opacity: 1; transform: translateX(0); } }
+
+@media (max-width: 800px) {
+  .hero-stock-preview { width: 156px; left: calc(var(--hero-pin-x) - 78px); padding: 8px 9px 4px; }
+  .hero-art { height: 210px; }
+}
+@media (max-width: 560px) {
+  .hero-top { grid-template-columns: 1.3fr 1fr; gap: 10px; }
+  .hero-art { height: 150px; max-width: 160px;
+    --hero-pin-x: 52%; --hero-pin-y: 37%; --hero-cursor-start-x: 28px; --hero-cursor-start-y: 42px; }
+  .hero-map { inset: 5px 8px 10px 10px; border-radius: 90px 90px 42px 42px; }
+  .hero-art .art-map-pin.hero-target { width: 31px; height: 31px; border-width: 3px; }
+  .hero-target > svg { width: 18px; }
+  .hero-demo-cursor { width: 22px; height: 27px; }
+  .hero-click-ring { width: 34px; height: 34px; }
+  .hero-stock-preview { top: calc(var(--hero-pin-y) + 22px); width: 136px; left: calc(var(--hero-pin-x) - 68px); padding: 7px 8px 3px; border-radius: 7px; }
+  .hero-stock-heading { font-size: 8px; padding-bottom: 6px; gap: 4px; }
+  .hero-stock-heading small { font-size: 6px; padding: 2px 3px; }
+  .hero-stock-row { min-height: 21px; font-size: 8px; gap: 5px; }
+  .hero-stock-row > b { font-size: 7px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-art .hero-target, .hero-demo-cursor, .hero-click-ring, .hero-stock-preview,
+  #results:not([hidden]), .col-map.has-map { animation: none !important; }
+  .hero-demo-cursor, .hero-click-ring { display: none; }
+  .hero-stock-preview { opacity: 1; transform: none; }
+}
+
