@@ -80,12 +80,12 @@ CATALOG = [
     I("wipes", "Wet wipes", "Baby", ["hygiene", "infant-care"], ["wipes", "wet wipes", "baby wipes"]),
     # Power and light
     I("batt_aa", "AA batteries", "Power and light", ["batteries", "portable-power"],
-      ["aa batteries", "aa", "double a"]),
+      ["aa batteries", "aa", "double a", "batteries", "battery"]),
     I("batt_aaa", "AAA batteries", "Power and light", ["batteries", "portable-power"],
       ["aaa batteries", "aaa"]),
     I("batt_d", "D batteries", "Power and light", ["batteries", "portable-power"],
       ["d batteries", "d-cell", "d cell", "d size batteries"]),
-    I("flashlight_led", "LED flashlight", "Power and light", ["light"], ["flashlight", "torch"]),
+    I("flashlight_led", "LED flashlight", "Power and light", ["light"], ["flashlight", "torch", "light", "lights", "flashlights"]),
     I("headlamp", "Headlamp", "Power and light", ["light", "hands-free"],
       ["headlamp", "head lamp", "headlight"]),
     I("lantern_led_battery", "LED lantern (battery)", "Power and light", ["light"],
@@ -100,7 +100,7 @@ CATALOG = [
       note="Fire risk: never leave a flame unattended and never use one if you smell gas. LED light is safer.", safe_subs=['glow_sticks', 'flashlight_led', 'headlamp', 'lantern_led_battery', 'lantern_solar_usb']),
     I("power_bank", "USB power bank", "Power and light", ["phone-charging", "portable-power"],
       ["power bank", "battery pack", "portable charger", "phone charger", "charge phones",
-       "charge my phone", "phone battery"]),
+       "charge my phone", "phone battery", "charger", "chargers"]),
     I("car_charger", "Car phone charger", "Power and light", ["phone-charging"],
       ["car charger", "car phone charger"],
       note="Charge from a parked car with the engine running outdoors only, never in a closed garage."),
@@ -406,15 +406,16 @@ def make_inventory(stype, dist_epi):
         if random.random() > p:
             continue
         inv[item] = {"q": random.choice([1, 2, 3, 4, 6, 8, 12, 18, 24, 36]), "age": verified_age()}
-    # Crisis-relief places are restocked by agencies, so they largely escape the panic-buying
-    # shortage that empties nearby stores -- that is why they matter as a fallback. The exception is
-    # the handful of GUARANTEED_OUT items that everyone rushes first (bottled water, D batteries,
-    # 1 lb propane, infant formula powder): inside the shortage zone even relief points ration those,
-    # so the demo's "nearest stock is far away / needs a substitute" scenario still holds for them.
+    # Crisis-relief places are restocked by agencies, so they escape most of the panic-buying
+    # shortage. Water is the signature thing relief points hand out, so they keep it even downtown --
+    # this is why searching "water" near the epicenter now returns a nearby water-distribution point
+    # instead of nothing. The other first-to-go items (infant formula powder, D batteries, 1 lb
+    # propane) still run out at relief points downtown, so the "nearest stock is far / needs a safe
+    # substitute" scenario, and the tests that protect the substitute and safety rules, still hold.
     if stype in RELIEF_TYPES:
         if dist_epi <= GUARANTEED_OUT_KM:
             for item in GUARANTEED_OUT:
-                if item in inv:
+                if item != "water_bottled" and item in inv:
                     inv[item]["q"] = 0
         return inv
     for item, rec in inv.items():

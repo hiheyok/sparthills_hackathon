@@ -354,7 +354,9 @@
   "aliases": [
    "aa batteries",
    "aa",
-   "double a"
+   "double a",
+   "batteries",
+   "battery"
   ],
   "policy": "free",
   "note": "",
@@ -406,7 +408,10 @@
   ],
   "aliases": [
    "flashlight",
-   "torch"
+   "torch",
+   "light",
+   "lights",
+   "flashlights"
   ],
   "policy": "free",
   "note": "",
@@ -521,7 +526,9 @@
    "phone charger",
    "charge phones",
    "charge my phone",
-   "phone battery"
+   "phone battery",
+   "charger",
+   "chargers"
   ],
   "policy": "free",
   "note": "",
