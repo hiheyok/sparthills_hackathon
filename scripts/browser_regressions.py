@@ -374,6 +374,22 @@ class BrowserRegressions(unittest.TestCase):
             route.fulfill(response=response, json=data)
         self.page.route('**/api/meta', meta)
 
+    def test_map_uses_openstreetmap_when_no_google_key_is_configured(self):
+        google_requests = []
+        self.page.on('request', lambda req: google_requests.append(req.url) if 'maps.googleapis.com' in req.url else None)
+        def meta(route):
+            response = route.fetch()
+            data = response.json()
+            data['maps'] = {'apiKey': ''}
+            route.fulfill(response=response, json=data)
+        self.page.route('**/api/meta', meta)
+        self.load()
+        self.submit()
+        expect(self.page.locator('#map')).to_have_attribute('data-provider', 'openstreetmap')
+        self.assertEqual(google_requests, [])
+        self.assert_road()
+        self.assertEqual(self.errors, [])
+
     def test_google_download_failure_uses_labeled_backup(self):
         self.configure_test_google_key()
         self.page.route('https://maps.googleapis.com/maps/api/js?**', lambda r: r.fulfill(status=503, body='unavailable'))
