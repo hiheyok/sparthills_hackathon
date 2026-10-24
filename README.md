@@ -84,7 +84,9 @@ If every model fails, the app still answers with the rules fallback and says so 
 
 ### Bedrock Guardrails (optional)
 
-Create a guardrail in the Bedrock console, then `GUARDRAIL_ID=<id> bash scripts/deploy.sh`. The Converse calls will include it.
+Create a guardrail in the Bedrock console, then `GUARDRAIL_ID=<id> bash scripts/deploy.sh`. The Converse calls will include it. Use the guardrail ID, not its ARN or name.
+
+The stack also allows the function role `bedrock:ApplyGuardrail` on that one guardrail in `BEDROCK_REGION`, which Bedrock requires on top of model invocation. Without it every call is denied and the app answers from rules. A guardrail with cross-Region inference turned on needs more permissions on its guardrail profiles, which the template does not grant ([AWS docs](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrail-profiles-permissions.html)).
 
 ## How it maps to the judging rubric
 

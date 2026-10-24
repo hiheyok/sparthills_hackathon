@@ -24,7 +24,11 @@ Parameters:
   GuardrailId:
     Type: String
     Default: ''
-    Description: Optional Amazon Bedrock Guardrail ID applied to every model call.
+    AllowedPattern: '^[a-z0-9]*$'
+    ConstraintDescription: Use the guardrail ID (for example abc123def456), not its ARN or name.
+    Description: >-
+      Optional Amazon Bedrock Guardrail ID applied to every model call. The function role is
+      allowed bedrock:ApplyGuardrail on this guardrail in BedrockRegion.
   GuardrailVersion:
     Type: String
     Default: DRAFT
@@ -101,6 +105,14 @@ Resources:
                   # Regions, so the model ARN Region is a wildcard.
                   - !Sub 'arn:${AWS::Partition}:bedrock:*::foundation-model/*'
                   - !Sub 'arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*'
+              # Converse calls that carry a guardrail (GUARDRAIL_ID below) are authorized with
+              # bedrock:ApplyGuardrail on that guardrail, in addition to InvokeModel above.
+              - !If
+                - HasGuardrail
+                - Effect: Allow
+                  Action: bedrock:ApplyGuardrail
+                  Resource: !Sub 'arn:${AWS::Partition}:bedrock:${BedrockRegion}:${AWS::AccountId}:guardrail/${GuardrailId}'
+                - !Ref AWS::NoValue
         - PolicyName: ReportsTable
           PolicyDocument:
             Version: '2012-10-17'
