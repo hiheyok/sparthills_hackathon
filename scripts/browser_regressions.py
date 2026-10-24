@@ -6,11 +6,13 @@ Requires `pip install playwright` and Chrome (or BROWSER_CHANNEL=chromium with
 AI, road routing and map tiles make no external requests.
 """
 import datetime
+import json
 import os
 import re
 import sys
 import threading
 import time
+import traceback
 import unittest
 from http.server import ThreadingHTTPServer
 from pathlib import Path
@@ -28,6 +30,76 @@ import handler
 import store
 
 TEXT = 'I need bottled water, canned food and AA batteries'
+
+# What the page looked like when a test failed. Short on purpose: it ends up in a CI annotation.
+PAGE_STATE = """() => {
+  const text = (sel) => { const e = document.querySelector(sel); return e ? e.innerText.replace(/\\s+/g, ' ').trim().slice(0, 140) : null; };
+  const go = document.querySelector('#go');
+  return {
+    viewport: innerWidth + 'x' + innerHeight, notice: text('#notice'), formError: text('#formError'),
+    plan: text('#planTitle'), mapNote: text('#mapNote'), go: go ? go.textContent.trim() + (go.disabled ? ' (disabled)' : '') : null,
+    modes: [...document.querySelectorAll('#r-mode .mode-btn')].map((b) => b.dataset.mode + ' pressed=' + b.getAttribute('aria-pressed') + ' ' + b.querySelector('.mode-sub').innerText),
+    paths: [...document.querySelectorAll('#map path')].map((p) => 'w' + p.getAttribute('stroke-width') + ' L' + ((p.getAttribute('d') || '').match(/L/g) || []).length),
+  };
+}"""
+
+
+def annotation(test, err):
+    """A GitHub Actions error annotation for a failed test, carrying the page state and the requests it made.
+    The job log is not always at hand (it needs sign-in); annotations show on the pull request and in the API."""
+    line = ''
+    for frame in reversed(traceback.extract_tb(err[2]) if err[2] else []):
+        if frame.filename.endswith('browser_regressions.py'):
+            line = f',line={frame.lineno}'
+            break
+    page = getattr(test, 'page', None)
+    try:
+        state = json.dumps(page.evaluate(PAGE_STATE)) if page else 'no page'
+    except Exception as exc:                                  # the page may already be closed
+        state = f'page state unavailable ({type(exc).__name__})'
+    calls = ', '.join(f"{path}:{(body or {}).get('mode', '-')}" for path, body in getattr(test, 'calls', [])[-16:])
+    reason = ' '.join(traceback.format_exception_only(err[0], err[1])).strip()
+    reason = reason.split('\nAria snapshot')[0].strip()                  # Playwright appends the whole page tree
+    body = f'{reason[:700]}\npage: {state[:900]}\nrequests: {calls[:400]}\npage errors: {str(getattr(test, "errors", ""))[:300]}'
+    body = body.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+    ident = test.id()
+    title = ident.rsplit('.', 1)[-1] if ' ' not in ident else ident        # class-level errors are named "setUpClass (...)"
+    title = re.sub(r'[,:\r\n]', ' ', title)
+    return f'::error file=scripts/browser_regressions.py{line},title={title}::{body}'
+
+
+class ReportingResult(unittest.TextTestResult):
+    """Builds each annotation while the failed test's page is still open (unittest reports a failure before
+    tearDown), and prints them together after the usual report. Diagnostics never fail a run themselves."""
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.annotations = []
+
+    def _note(self, test, err):
+        if os.environ.get('GITHUB_ACTIONS') != 'true':
+            return
+        try:
+            self.annotations.append(annotation(test, err))
+        except Exception:
+            pass
+
+    def addFailure(self, test, err):
+        self._note(test, err)
+        super().addFailure(test, err)
+
+    def addError(self, test, err):
+        self._note(test, err)
+        super().addError(test, err)
+
+    def printErrors(self):
+        super().printErrors()
+        for note in self.annotations:
+            self.stream.writeln(note)
+        self.stream.flush()
+
+
+class Runner(unittest.TextTestRunner):
+    resultclass = ReportingResult
 
 
 class QuietLocal(Local):
@@ -465,4 +537,4 @@ class BrowserRegressions(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    unittest.main(testRunner=Runner, verbosity=2)
