@@ -560,37 +560,120 @@ def alternatives(gaps, pool, intent):
                                  lambda raw: _alt_validator(set(gap_ids), set(candidates))(extract_json(raw)),
                                  max_tokens=1800)
     except AIUnavailable as exc:
-        alts = fallback_alternatives(gaps, candidates, pool)
+        alts = fallback_alternatives(gaps, pool)
         trace = _fallback_trace("alternatives", exc, t0)
     return alts, trace
 
 
-def fallback_alternatives(gaps, candidates, pool):
+def _sub(item_id, fit, why, how_to_use="", caution=""):
+    return {"item_id": item_id, "fit": fit, "why": why, "how_to_use": how_to_use, "caution": caution}
+
+
+_BATTERIES = "Check which batteries it takes. A different size will not fit."
+# Substitutes the RULES fallback may offer, best first. Hand-written: a substitute is listed only
+# when it does the same job whatever the person is doing. Sharing a tag proves nothing (a
+# hand-crank radio is not a lantern battery, and AA cells do not fit a D-cell lantern), and we
+# do not know what a battery or a charger is for. An item with no entry here gets no rules-based
+# substitute: the need stays open and the person is told so. Caution items may only be offered
+# what their own safe_subs allowlist names; entries here just give those a better explanation.
+FALLBACK_SUBS = {
+    "water_bottled": [
+        _sub("water_filter", "partial", "Makes tap, tank or stream water safe to drink. You still need a water source.",
+             "Fill from the cleanest source you have and filter it before drinking."),
+        _sub("water_tabs", "partial", "Treats tap, tank or stream water so it is safer to drink. You still need a water source.",
+             "Follow the package directions and wait time.")],
+    "water_filter": [_sub("water_tabs", "partial", "Treats water too, but does not take out dirt or grit.",
+                          "Follow the package directions and wait time.")],
+    "water_tabs": [_sub("water_filter", "partial", "Filters water with no waiting time.", "Filter the water before you drink it.")],
+    "food_canned": [
+        _sub("food_meals", "strong", "Shelf-stable food that needs little or no cooking."),
+        _sub("food_bars", "partial", "Ready to eat with no cooking.", caution="Check the label for allergens."),
+        _sub("peanut_butter", "partial", "Ready to eat, with plenty of calories.", caution="Check for allergies first."),
+        _sub("dried_fruit_nuts", "partial", "Ready to eat with no cooking.", caution="Check for allergies first.")],
+    "food_meals": [_sub("food_canned", "strong", "Shelf-stable food that is ready to eat."),
+                   _sub("food_bars", "partial", "Ready to eat with no cooking.", caution="Check the label for allergens.")],
+    "food_bars": [_sub("dried_fruit_nuts", "partial", "Ready to eat with no cooking.", caution="Check for allergies first."),
+                  _sub("peanut_butter", "partial", "Ready to eat, with plenty of calories.", caution="Check for allergies first.")],
+    "peanut_butter": [_sub("food_bars", "partial", "Ready to eat, with plenty of calories.", caution="Check the label for allergens."),
+                      _sub("dried_fruit_nuts", "partial", "Ready to eat with no cooking.", caution="Check for allergies first.")],
+    "dried_fruit_nuts": [_sub("food_bars", "partial", "Ready to eat with no cooking.", caution="Check the label for allergens."),
+                         _sub("peanut_butter", "partial", "Ready to eat, with plenty of calories.", caution="Check for allergies first.")],
+    "flashlight_led": [
+        _sub("headlamp", "strong", "Gives light and leaves both hands free.", caution=_BATTERIES),
+        _sub("lantern_solar_usb", "partial", "Lights a room, and needs no batteries."),
+        _sub("lantern_led_battery", "partial", "Lights a room but cannot be pointed.", caution=_BATTERIES),
+        _sub("glow_sticks", "workaround", "A flame-free light that lasts a few hours, one use only.")],
+    "headlamp": [_sub("flashlight_led", "partial", "Gives light, but you have to hold it.", caution=_BATTERIES),
+                 _sub("lantern_solar_usb", "partial", "Lights a room, and needs no batteries."),
+                 _sub("glow_sticks", "workaround", "A flame-free light that lasts a few hours, one use only.")],
+    "lantern_led_battery": [
+        _sub("lantern_solar_usb", "strong", "Lights a room and needs no batteries."),
+        _sub("flashlight_led", "partial", "Gives light but cannot light a whole room.", caution=_BATTERIES),
+        _sub("headlamp", "partial", "Gives light and leaves both hands free.", caution=_BATTERIES),
+        _sub("glow_sticks", "workaround", "A flame-free light that lasts a few hours, one use only.")],
+    "lantern_solar_usb": [
+        _sub("lantern_led_battery", "partial", "Lights a room.", caution=_BATTERIES),
+        _sub("flashlight_led", "partial", "Gives light but cannot light a whole room.", caution=_BATTERIES),
+        _sub("headlamp", "partial", "Gives light and leaves both hands free.", caution=_BATTERIES)],
+    "glow_sticks": [_sub("flashlight_led", "strong", "Gives light that lasts longer.", caution=_BATTERIES),
+                    _sub("headlamp", "strong", "Gives light and leaves both hands free.", caution=_BATTERIES)],
+    "power_bank": [_sub("power_station", "strong", "Charges phones and other USB devices, and holds more power."),
+                   _sub("car_charger", "workaround", "Charges a phone from a car.",
+                        caution="Charge from a parked car with the engine running outdoors only, never in a closed garage.")],
+    "car_charger": [_sub("power_bank", "strong", "Charges a phone without a car."),
+                    _sub("power_station", "partial", "Charges phones and other USB devices.")],
+    "radio_crank": [_sub("radio_battery", "partial", "Brings news and alerts.", caution="It needs batteries.")],
+    "radio_battery": [_sub("radio_crank", "strong", "Brings news and alerts with no batteries.")],
+    "ice_bag": [_sub("ice_packs", "workaround", "Keeps a cooler cold for a while.",
+                     caution="Only works if the packs are already frozen. With the power out they will not freeze.")],
+    "ice_packs": [_sub("ice_bag", "partial", "Keeps a cooler cold.", caution="Ice melts and leaves water in the cooler.")],
+    "mylar_blanket": [_sub("sleeping_bag", "strong", "Keeps you warm."), _sub("hand_warmers", "partial", "Adds warmth for a few hours.")],
+    "sleeping_bag": [_sub("mylar_blanket", "partial", "Reflects body heat back to you.")],
+    "hand_warmers": [_sub("mylar_blanket", "partial", "Holds in body heat."), _sub("sleeping_bag", "partial", "Keeps you warm.")],
+    "tent": [_sub("tarp", "partial", "Shelter from rain and wind, with some setup."),
+             _sub("plastic_sheeting", "workaround", "Temporary cover from rain and wind.")],
+    "tarp": [_sub("plastic_sheeting", "partial", "Covers a roof or opening, but tears more easily.")],
+    "plastic_sheeting": [_sub("tarp", "strong", "Covers a roof or opening and holds up better.")],
+    "n95_mask": [_sub("respirator_p100", "strong", "Filters smoke particles at least as well.",
+                      caution="It must seal against your face. Facial hair breaks the seal.")],
+    "respirator_p100": [_sub("n95_mask", "partial", "Filters smoke particles, a bit less than a P100.",
+                             caution="It must seal against your face. Facial hair breaks the seal.")],
+    "bandages": [_sub("first_aid_kit", "partial", "Most kits include bandages and gauze.")],
+    "first_aid_kit": [_sub("bandages", "partial", "Covers cuts and scrapes only."),
+                      _sub("antiseptic", "partial", "Cleans cuts and scrapes only.")],
+    "antiseptic": [_sub("first_aid_kit", "partial", "Most kits include antiseptic wipes.")],
+    "baby_formula_powder": [_sub("baby_formula_rtf", "strong", "The same kind of formula, ready to feed, with no water needed.")],
+    "baby_formula_rtf": [_sub("baby_formula_powder", "strong", "The same kind of formula. It needs clean, safe water to mix.")],
+}
+
+
+def fallback_alternatives(gaps, pool):
+    """Rules-only substitutes: FALLBACK_SUBS for ordinary items, the item's own safe_subs
+    allowlist for caution items, nothing for prescriptions. Only items in stock nearby
+    (`pool`) qualify. No entry means no substitute and the need stays open."""
+    gap_ids = {g["item_id"] for g in gaps}
     out = []
     for g in gaps:
-        cat = CATALOG[g["item_id"]]
-        if cat["policy"] == "none":
-            out.append({"for_item": g["item_id"], "verdict": "no_safe_substitute", "options": [],
-                        "no_purchase_tips": [], "escalate": cat.get("escalate") or None})
-            continue
-        want = set()
-        for tg in cat["tags"]:
-            want |= {tg} | RELATED_TAGS.get(tg, set())
-        pool_ids = candidates
-        if cat["policy"] == "caution":  # curated allowlist only, no tag guessing
-            pool_ids = [k for k in candidates if k in (cat.get("safe_subs") or [])]
-        scored = sorted(((len(want & set(CATALOG[k]["tags"])), -pool[k]["dist_km"], k) for k in pool_ids), reverse=True)
+        gid = g["item_id"]
+        cat = CATALOG[gid]
         options = []
-        for score, _, k in scored:
-            if (score == 0 and cat["policy"] != "caution") or len(options) == 3:
-                break
-            c = CATALOG[k]
-            shared = sorted(want & set(c["tags"]))
-            options.append({"item_id": k, "fit": "partial",
-                            "why": ("Serves a similar purpose (" + ", ".join(shared) + ")." if shared else "Approved alternative for this item."),
-                            "how_to_use": "",
-                            "caution": c["note"] if c["policy"] != "free" else ("Ask a professional if unsure." if cat["policy"] == "caution" else "")})
-        out.append({"for_item": g["item_id"], "verdict": "substitutes_available" if options else "none_found",
+        if cat["policy"] != "none":
+            curated = {s["item_id"]: s for s in FALLBACK_SUBS.get(gid, [])}
+            if cat["policy"] == "caution":
+                ranked = [curated.get(k) or _sub(k, "partial", "Approved alternative for this item.")
+                          for k in cat.get("safe_subs") or []]
+            else:
+                ranked = list(curated.values())
+            for s in ranked:
+                k = s["item_id"]
+                if k in pool and k not in gap_ids and CATALOG[k]["policy"] != "none":
+                    caution = s["caution"] or CATALOG[k]["note"] or ("Ask a professional if unsure." if cat["policy"] == "caution" else "")
+                    options.append({**s, "caution": caution})
+                    if len(options) == 3:
+                        break
+        out.append({"for_item": gid,
+                    "verdict": ("no_safe_substitute" if cat["policy"] == "none"
+                                else "substitutes_available" if options else "none_found"),
                     "options": options, "no_purchase_tips": [], "escalate": cat.get("escalate") or None})
     return out
 

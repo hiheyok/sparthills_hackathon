@@ -310,6 +310,47 @@ class AlternativesTests(Base):
         self.assertEqual(alts[0]["options"], [])
         self.assertIn("pharmacist", alts[0]["escalate"])
 
+    def rules_only(self, item_id, pool):
+        os.environ["AI_MODE"] = "off"
+        try:
+            ai.set_client(FakeBedrock([]))
+            alts, trace = ai.alternatives([{"item_id": item_id, "label": item_id, "priority": 2, "why": ""}], pool, {})
+        finally:
+            os.environ["AI_MODE"] = "auto"
+        self.assertEqual(trace["mode"], "rules")
+        return alts[0]
+
+    def test_fallback_does_not_swap_other_battery_sizes_or_unrelated_gear(self):
+        pool = {k: {"dist_km": 1.0 + i} for i, k in enumerate(
+            ["batt_aa", "batt_aaa", "batt_d", "radio_crank", "lantern_solar_usb", "power_bank", "headlamp", "flashlight_led"])}
+        for missing in ("batt_d", "batt_aa", "batt_aaa"):
+            alt = self.rules_only(missing, {k: v for k, v in pool.items() if k != missing})
+            self.assertEqual((alt["options"], alt["verdict"]), ([], "none_found"), missing)
+
+    def test_fallback_offers_only_substitutes_that_serve_the_same_purpose(self):
+        pool = {k: {"dist_km": 1.0 + i} for i, k in enumerate(
+            ["headlamp", "radio_crank", "food_bars", "water_tabs", "water_filter", "power_bank", "water_jug"])}
+        self.assertEqual([o["item_id"] for o in self.rules_only("water_bottled", pool)["options"]], ["water_filter", "water_tabs"])
+        self.assertEqual([o["item_id"] for o in self.rules_only("radio_battery", pool)["options"]], ["radio_crank"])
+        no_radio = {k: v for k, v in pool.items() if k != "radio_crank"}
+        self.assertEqual(self.rules_only("radio_battery", no_radio)["options"], [])   # nothing else in stock is a radio
+        lantern = self.rules_only("lantern_led_battery", {"lantern_solar_usb": {"dist_km": 3.0}, "radio_crank": {"dist_km": 0.5},
+                                                        "batt_d": {"dist_km": 0.5}})
+        self.assertEqual([(o["item_id"], o["fit"]) for o in lantern["options"]], [("lantern_solar_usb", "strong")])
+
+    def test_fallback_table_is_consistent_with_the_catalog_and_its_safety_rules(self):
+        for missing, subs in ai.FALLBACK_SUBS.items():
+            self.assertIn(missing, ai.CATALOG, missing)
+            self.assertNotEqual(ai.CATALOG[missing]["policy"], "none", f"{missing} must never be substituted")
+            for s in subs:
+                self.assertIn(s["item_id"], ai.CATALOG, f"{missing} -> {s['item_id']}")
+                self.assertNotEqual(s["item_id"], missing)
+                self.assertNotEqual(ai.CATALOG[s["item_id"]]["policy"], "none", f"{missing} -> {s['item_id']}")
+                self.assertIn(s["fit"], ("strong", "partial", "workaround"))
+                self.assertTrue(s["why"], f"{missing} -> {s['item_id']} needs an explanation")
+                if ai.CATALOG[missing]["policy"] == "caution":
+                    self.assertIn(s["item_id"], ai.CATALOG[missing]["safe_subs"], f"{missing} -> {s['item_id']} is not on its allowlist")
+
     def test_prompt_never_offers_prescription_items_as_candidates(self):
         fake = FakeBedrock([{"alternatives": [{"for_item": "water_bottled", "options": []}]}])
         ai.set_client(fake)

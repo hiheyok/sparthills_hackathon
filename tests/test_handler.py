@@ -150,6 +150,15 @@ class HandlerTests(unittest.TestCase):
         self.assertNotIn(top, [s["id"] for s in after["results"][0]["stores"]])
         self.assertEqual(post("/api/report", {"store_id": top, "item_id": "*", "status": "closed"})[0], 200)
 
+    def test_rules_fallback_does_not_swap_unrelated_gear_for_missing_batteries(self):
+        status, body = post("/api/plan", {**DOWNTOWN, "text": "D batteries for my lantern"})
+        self.assertEqual(status, 200)
+        alt = next(a for a in body["plan"]["alternatives"] if a["for_item"] == "batt_d")
+        self.assertEqual((alt["options"], alt["verdict"]), ([], "none_found"))
+        self.assertEqual([i for s in body["plan"]["route"]["stops"] for i in s["items"] if i["is_alt"]], [])
+        self.assertIn("batt_d", [u["item_id"] for u in body["plan"]["unresolved"]])
+        self.assertNotIn("Everything on your list is covered", body["brief"]["summary"])
+
     def test_oversized_request_is_never_described_as_covered(self):
         intent = {"needs": [{"item_id": "insulin", "priority": 1, "qty": 99, "label": "insulin"}]}
         status, b = post("/api/brief", {**DOWNTOWN, "intent": intent})
