@@ -332,7 +332,7 @@
     return `<li class="ticket ${i.is_alt ? 'swap' : ''}"><div class="ticket-main">
       ${i.is_alt ? '<span class="tag">Substitute</span>' : ''}<span class="ticket-name">${esc(i.name)}${i.qty > 1 ? ` x${i.qty}` : ''}</span>
       ${i.is_alt ? `<span class="ticket-sub">instead of ${esc(i.replaces_name)}</span>` : ''}</div>
-      <div class="ticket-sub"><span class="${f.cls}">${esc(f.text)}</span>${i.low ? '<span class="warn">Low stock</span>' : ''}</div></li>`;
+      <div class="ticket-sub"><span class="${f.cls}">${esc(f.text)}</span>${i.low ? '<span class="warn">Low stock</span>' : ''}${i.qty_needed > i.qty ? `<span class="warn">Buy ${i.qty} of the ${i.qty_needed} you need</span>` : ''}</div></li>`;
   }
 
   function reportPanel(stop) {
@@ -357,7 +357,7 @@
     } else {
       html = `<h2 class="plan-title" id="planTitle">${esc(brief.headline)}</h2>
         ${brief.summary ? `<p class="lede">${esc(brief.summary)}</p>` : ''}
-        <div class="facts-row"><span>${stops.length} stop${stops.length > 1 ? 's' : ''}</span><span>${plan.route.total_drive_min} min driving</span><span>${sum.in_route} of ${sum.needs} items covered</span>${sum.swapped ? `<span>${sum.swapped} substitute${sum.swapped > 1 ? 's' : ''}</span>` : ''}</div>
+        <div class="facts-row"><span>${stops.length} stop${stops.length > 1 ? 's' : ''}</span><span>${plan.route.total_drive_min} min driving</span><span>${sum.covered ?? sum.in_route} of ${sum.needs} items covered</span>${sum.swapped ? `<span>${sum.swapped} substitute${sum.swapped > 1 ? 's' : ''}</span>` : ''}</div>
         <div id="mapSlot" class="map-slot"></div>
         <ol class="route"><li class="origin"><span class="node" aria-hidden="true"></span><div class="origin-text"><b>You are here</b><small>${esc(state.originLabel || '')}${state.originLabel ? ', ' : ''}leave about ${esc(plan.route.leaves)}</small></div></li>
         ${stops.map((s) => `<li class="stop"><span class="node" aria-hidden="true">${s.order}</span><div>
@@ -369,6 +369,8 @@
     }
     const unresolved = plan.unresolved.filter((u) => !plan.alternatives.some((a) => a.for_item === u.item_id));
     if (unresolved.length) html += `<p class="lede">Not found nearby: ${unresolved.map((u) => esc(u.name)).join(', ')}.</p>`;
+    const shorts = plan.shortfalls || [];
+    if (shorts.length) html += `<p class="lede">Not enough in stock for the full amount: ${shorts.map((u) => `${esc(u.name)} (${u.found} of ${u.qty})`).join(', ')}.</p>`;
     const notes = [...(brief.safety_notes || [])];
     const stuck = brief.if_stuck || [];
     const box = (title, list) => `<div class="next-step"><b>${title}</b><ul>${list.map((n) => `<li>${esc(n)}</li>`).join('')}</ul></div>`;

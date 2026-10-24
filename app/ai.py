@@ -568,6 +568,7 @@ Voice: calm, direct, plain words (about 7th-grade reading level), sentence case,
 Safety first: if situation.urgent_safety.flag is true, the FIRST safety note must tell them to get safe and call 911 before driving for supplies. Add 1 to 3 more safety notes that are well established for this disaster and these items (for example: wildfire smoke -> N95 masks help, keep windows closed; generators and charcoal outdoors only; no candles if you smell gas; keep insulin cool but never frozen). No medication doses or chemical mixing ratios.
 If an item was swapped for an alternative, say so in that stop's text and what to check (ask the pharmacist, confirm the stove type, and so on).
 If items could not be found, use "if_stuck" for what to do next (call ahead, ask staff for alternatives, dial 211), at most 3 short bullets.
+If PLAN.partly_available lists an item, the route cannot supply the full amount: say how many are still missing in the summary, and never say everything is covered. Use quantity_here for how many to buy at that stop.
 
 Respond with ONE JSON object and nothing else:
 {"headline":"max 90 characters: what to do first","summary":"2 sentences at most","steps":[{"stop":1,"say":"1-2 sentences: what to get here and anything to ask or check"}],"safety_notes":["..."],"if_stuck":["..."]}
@@ -580,6 +581,7 @@ def plan_for_prompt(plan, intent):
         "minutes_to_get_there": s["leg_min"], "arrive": s["arrive"], "hours": s["open_note"],
         "store_note": s["store"]["store_note"],
         "get": [{"item": i["name"], "person_called_it": i["label"], "swapped_in_for": i["replaces_name"],
+                 "quantity_here": i["qty"], "quantity_needed": i["qty_needed"],
                  "low_stock": i["low"], "info_may_be_stale": i["confidence"] == "stale",
                  "neighbor_reported": i["source"] == "community"} for i in s["items"]],
     } for s in plan["route"]["stops"]]
@@ -588,6 +590,8 @@ def plan_for_prompt(plan, intent):
                       "urgent_safety": intent.get("urgent_safety")},
         "stops": stops,
         "not_found_nearby": [{"item": u["name"], "priority": u["priority"]} for u in plan["unresolved"]],
+        "partly_available": [{"item": s["name"], "needed": s["qty"], "found": s["found"], "still_missing": s["missing"],
+                              "priority": s["priority"]} for s in plan.get("shortfalls", [])],
         "no_substitute_policy": [a["for_name"] for a in plan["alternatives"] if a["policy"] == "none"],
     }
 
@@ -629,9 +633,11 @@ def fallback_brief(plan, intent):
     if stops:
         first = stops[0]
         headline = f"Start at {first['store']['name']}, about {first['leg_min']} minutes away."
+        short = [f"{s['name'].lower()} ({s['found']} of {s['qty']})" for s in plan.get("shortfalls", [])]
+        problems = ((f"{len(plan['unresolved'])} item(s) could not be found nearby. " if plan["unresolved"] else "")
+                    + ("Not enough in stock for the full amount: " + ", ".join(short) + "." if short else ""))
         summary = (f"{len(stops)} stop{'s' if len(stops) != 1 else ''}, about {plan['route']['total_min']} minutes in all. "
-                   + (f"{len(plan['unresolved'])} item(s) could not be found nearby." if plan["unresolved"] else
-                      "Everything on your list is covered."))
+                   + (problems.strip() or "Everything on your list is covered."))
     else:
         headline = "No open store near you has these items right now."
         summary = "Try a wider search area, or see the alternatives below."

@@ -2,6 +2,7 @@ import os
 import sys
 import time
 import unittest
+import unittest.mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "app"))
 
@@ -92,6 +93,58 @@ class EngineTests(unittest.TestCase):
     def test_partial_when_quantity_short(self):
         res = e.search_item("insulin", 999, DOWNTOWN[0], DOWNTOWN[1], 8, MORNING, {}, self.now)
         self.assertEqual(res["status"], "partial")
+
+    def plan_for(self, item, qty, reports=None):
+        return e.build_plan([need(item, 1, qty)], [], *DOWNTOWN, 8, MORNING, reports or {}, self.now)
+
+    def test_store_that_can_fill_the_quantity_is_preferred_over_a_nearer_short_one(self):
+        stores = self.search("insulin", qty=4)["stores"]
+        self.assertTrue(any(s["short"] for s in stores) and any(not s["short"] for s in stores),
+                        "demo data should offer both a short and a full store")
+        plan = self.plan_for("insulin", 4)
+        items = [i for s in plan["route"]["stops"] for i in s["items"]]
+        self.assertEqual(len(items), 1)
+        self.assertEqual((items[0]["qty"], items[0]["qty_needed"]), (4, 4))
+        self.assertGreaterEqual(items[0]["q"], 4)
+        self.assertFalse(items[0]["short"])
+        self.assertEqual(plan["shortfalls"], [])
+        self.assertEqual((plan["summary"]["covered"], plan["summary"]["short"]), (1, 0))
+
+    def test_quantity_is_split_across_stops_when_no_single_store_can_fill_it(self):
+        near = [s["id"] for s in self.search("insulin")["stores"][:2]]
+        reports = {(s["id"], "insulin"): {"status": "in_stock" if s["id"] in near else "out", "ts": self.now - 30}
+                   for s in e.STORES if "insulin" in s["inv"]}                    # exactly two stores, 5 units each
+        plan = self.plan_for("insulin", 8, reports)
+        stops = [(s["store"]["id"], i["qty"]) for s in plan["route"]["stops"] for i in s["items"]]
+        self.assertEqual(sorted(sid for sid, _ in stops), sorted(near))
+        self.assertEqual(sorted(q for _, q in stops), [3, 5])
+        self.assertTrue(all(i["qty_needed"] == 8 for s in plan["route"]["stops"] for i in s["items"]))
+        self.assertEqual(plan["shortfalls"], [])
+        self.assertEqual(plan["summary"]["covered"], 1)
+
+    def test_request_larger_than_all_available_stock_keeps_the_shortage(self):
+        plan = self.plan_for("insulin", 99)
+        units = sum(i["qty"] for s in plan["route"]["stops"] for i in s["items"])
+        self.assertGreater(units, 0)
+        self.assertLess(units, 99)
+        (short,) = plan["shortfalls"]
+        self.assertEqual((short["item_id"], short["found"], short["missing"]), ("insulin", units, 99 - units))
+        self.assertEqual((plan["summary"]["covered"], plan["summary"]["short"], plan["summary"]["unresolved"]), (0, 1, 0))
+        text = e.render_plan_text(plan)
+        self.assertIn("Not enough in stock: Insulin (prescription), found %d of 99" % units, text)
+        self.assertIn("x%d of 99" % plan["route"]["stops"][0]["items"][0]["qty"], text)
+
+    def test_best_full_store_survives_the_candidate_limit(self):
+        def shop(n, dlat, q):
+            return {"id": n, "name": n, "type": "supermarket", "hood": "x", "lat": DOWNTOWN[0] + dlat, "lng": DOWNTOWN[1],
+                    "hours": {"always": True}, "status": "open", "note": "", "inv": {"insulin": {"q": q, "age": 5}}}
+        shops = [shop("near%d" % i, 0.001 * (i + 1), 1) for i in range(9)] + [shop("far_full", 0.04, 10)]
+        with unittest.mock.patch.object(e, "STORES", shops):
+            res = e.search_item("insulin", 4, DOWNTOWN[0], DOWNTOWN[1], 10, MORNING, {}, self.now, limit=8)
+        ids = [s["id"] for s in res["stores"]]
+        self.assertEqual(len(ids), 8)
+        self.assertIn("far_full", ids)
+        self.assertEqual(res["status"], "found")
 
     def test_route_is_open_on_arrival_and_covers_found_items(self):
         needs = [need(i) for i in ("insulin", "cooler", "diapers", "food_canned")]

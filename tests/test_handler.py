@@ -150,6 +150,16 @@ class HandlerTests(unittest.TestCase):
         self.assertNotIn(top, [s["id"] for s in after["results"][0]["stores"]])
         self.assertEqual(post("/api/report", {"store_id": top, "item_id": "*", "status": "closed"})[0], 200)
 
+    def test_oversized_request_is_never_described_as_covered(self):
+        intent = {"needs": [{"item_id": "insulin", "priority": 1, "qty": 99, "label": "insulin"}]}
+        status, b = post("/api/brief", {**DOWNTOWN, "intent": intent})
+        self.assertEqual(status, 200)
+        self.assertEqual(b["plan"]["summary"]["covered"], 0)
+        self.assertEqual(len(b["plan"]["shortfalls"]), 1)
+        self.assertNotIn("Everything on your list is covered", b["brief"]["summary"])
+        self.assertIn("Not enough in stock", b["brief"]["summary"])
+        self.assertIn("Not enough in stock", b["plan_text"])
+
     def test_report_validation(self):
         bad = [{"store_id": "nope", "item_id": "insulin", "status": "out"},
                {"store_id": "s01", "item_id": "nope", "status": "out"},

@@ -144,7 +144,11 @@ def search_item(item_id, qty, lat, lng, radius_km, now_min, reports, now_ts, lim
     cands.sort(key=lambda v: (v["score"], v["dist_km"]))
     has_full = any(not c["short"] for c in cands)
     status = "found" if has_full else ("partial" if cands else "gap")
-    return {"item_id": item_id, "status": status, "stores": cands[:limit],
+    top = cands[:limit]
+    if has_full and top and all(c["short"] for c in top):
+        # closer, short stores must not push out the best store that can fill the whole request
+        top = top[:limit - 1] + [next(c for c in cands if not c["short"])]
+    return {"item_id": item_id, "status": status, "stores": top,
             "total_matches": len(cands), "stats": stats}
 
 
@@ -244,6 +248,7 @@ def build_plan(needs, alternatives, lat, lng, radius_km, now_min, reports, now_t
         alts_out.append(entry)
 
     route = plan_route(chosen, lat, lng, now_min, reports)
+    shortfalls = route.pop("shortfalls")
     placed = {it["key"] for stop in route["stops"] for it in stop["items"]}
     unresolved = [{"item_id": r["item_id"], "name": r["name"], "label": r["label"],
                    "priority": r["priority"],
@@ -251,12 +256,14 @@ def build_plan(needs, alternatives, lat, lng, radius_km, now_min, reports, now_t
                   for r in results if r["item_id"] not in placed]
     summary = {
         "needs": len(results), "in_route": len(placed),
+        "covered": len(placed) - len(shortfalls),   # in the route AND the full amount is available
+        "short": len(shortfalls),                   # in the route, but only part of the amount
         "swapped": sum(1 for stop in route["stops"] for it in stop["items"] if it["is_alt"]),
         "unresolved": len(unresolved),
     }
     return {"results": results, "alternatives": alts_out, "route": route, "unresolved": unresolved,
-            "summary": summary, "location": {"lat": lat, "lng": lng, "radius_km": radius_km},
-            "start_min": now_min}
+            "shortfalls": shortfalls, "summary": summary,
+            "location": {"lat": lat, "lng": lng, "radius_km": radius_km}, "start_min": now_min}
 
 
 def _simulate(order, lat, lng, now_min, reports):
@@ -279,39 +286,65 @@ def _simulate(order, lat, lng, now_min, reports):
 
 def plan_route(chosen, lat, lng, now_min, reports, max_stops=4):
     """Cheapest-insertion set cover. Repeatedly add the store (at the best
-    position in the route) that covers the most urgent still-missing items per
+    position in the route) that covers the most urgent still-missing units per
     extra minute. Every candidate route is re-simulated so that each store is
-    open when we actually arrive."""
+    open when we actually arrive.
+
+    Quantities count. If some store can fill a whole request, only such stores
+    are candidates for it (one stop, full amount). If none can, any store with
+    stock is a candidate and the amount is split across stops in route order;
+    whatever the route still cannot supply is returned in "shortfalls"."""
     by_key = {c["key"]: c for c in chosen}
-    uncovered = set(by_key)
+    stock = {}                        # (store id, item key) -> units on the shelf
     store_keys = defaultdict(set)
-    for c in chosen:
-        for s in c["stores"]:
+
+    def offer(c, stores):
+        for s in stores:
+            stock[(s["id"], c["key"])] = s["q"]
             store_keys[s["id"]].add(c["key"])
+
+    for c in chosen:
+        offer(c, [s for s in c["stores"] if s["q"] >= c["qty"]] or c["stores"])
+    left = {k: c["qty"] for k, c in by_key.items()}
 
     order = []
     base_min = 0
-    while uncovered and len(order) < max_stops:
-        best = None
-        for sid, keys in store_keys.items():
-            gain_keys = keys & uncovered
-            if sid in order or not gain_keys:
-                continue
-            gain = sum(PRIORITY_WEIGHT.get(by_key[k]["priority"], 3) for k in gain_keys)
-            for pos in range(len(order) + 1):
-                cand = order[:pos] + [sid] + order[pos:]
-                legs = _simulate(cand, lat, lng, now_min, reports)
-                if legs is None:
+
+    def grow():
+        nonlocal order, base_min
+        while any(n > 0 for n in left.values()) and len(order) < max_stops:
+            best = None
+            for sid, keys in store_keys.items():
+                if sid in order:
                     continue
-                added = sum(l["min"] for l in legs) - base_min + SHOPPING_MIN
-                value = gain / (added + 6.0)
-                if best is None or value > best[0]:
-                    best = (value, cand, gain_keys)
-        if best is None:
-            break
-        _, order, gain_keys = best
-        base_min = sum(l["min"] for l in _simulate(order, lat, lng, now_min, reports))
-        uncovered -= gain_keys
+                gain = sum(PRIORITY_WEIGHT.get(by_key[k]["priority"], 3) * min(left[k], stock[(sid, k)]) / by_key[k]["qty"]
+                           for k in keys if left[k] > 0)
+                if gain <= 0:
+                    continue
+                for pos in range(len(order) + 1):
+                    cand = order[:pos] + [sid] + order[pos:]
+                    legs = _simulate(cand, lat, lng, now_min, reports)
+                    if legs is None:
+                        continue
+                    added = sum(l["min"] for l in legs) - base_min + SHOPPING_MIN
+                    value = gain / (added + 6.0)
+                    if best is None or value > best[0]:
+                        best = (value, cand, sid)
+            if best is None:
+                break
+            _, order, sid = best
+            base_min = sum(l["min"] for l in _simulate(order, lat, lng, now_min, reports))
+            for k in store_keys[sid]:
+                left[k] = max(0, left[k] - stock[(sid, k)])
+
+    grow()
+    # An item whose full-amount stores could not be reached in time may still be
+    # partly available elsewhere: some of it is better than none.
+    if any(left[c["key"]] == c["qty"] for c in chosen):
+        for c in chosen:
+            if left[c["key"]] == c["qty"]:
+                offer(c, c["stores"])
+        grow()
 
     # Re-order the chosen stops: mostly minimise driving, but pull stops that hold
     # critical (priority 1) items earlier. At most 4 stops, so 24 orders at most.
@@ -332,13 +365,15 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4):
         if best_perm:
             order = best_perm[1]
 
-    # each item is bought at the earliest stop in the route that has it
-    assigned = defaultdict(list)
-    taken = set()
+    # each item is bought at the earliest stops in the route that have it, up to the amount needed
+    left = {k: c["qty"] for k, c in by_key.items()}
+    assigned = defaultdict(list)      # store id -> [(item key, units to buy there)]
     for sid in order:
-        for k in sorted(store_keys[sid] - taken, key=lambda k: (by_key[k]["priority"], k)):
-            assigned[sid].append(k)
-            taken.add(k)
+        for k in sorted(store_keys[sid], key=lambda k: (by_key[k]["priority"], k)):
+            units = min(left[k], stock[(sid, k)])
+            if units > 0:
+                assigned[sid].append((k, units))
+                left[k] -= units
     order = [sid for sid in order if assigned[sid]]
     legs = _simulate(order, lat, lng, now_min, reports) or []
 
@@ -346,15 +381,15 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4):
     for idx, (sid, leg) in enumerate(zip(order, legs), start=1):
         s = STORE_BY_ID[sid]
         items = []
-        for k in assigned[sid]:
+        for k, units in assigned[sid]:
             c = by_key[k]
             sv = next(x for x in c["stores"] if x["id"] == sid)
             items.append({
                 "key": k, "item_id": c["item_id"], "name": c["name"], "label": c["label"],
-                "qty": c["qty"], "priority": c["priority"], "is_alt": c["is_alt"],
+                "qty": units, "qty_needed": c["qty"], "priority": c["priority"], "is_alt": c["is_alt"],
                 "replaces": c["replaces"],
                 "replaces_name": CATALOG[c["replaces"]]["name"] if c["replaces"] else None,
-                "q": sv["q"], "low": sv["low"], "short": sv["short"], "age_min": sv["age_min"],
+                "q": sv["q"], "low": sv["low"], "short": sv["q"] < c["qty"], "age_min": sv["age_min"],
                 "confidence": sv["confidence"], "source": sv["source"],
             })
         stops.append({
@@ -366,9 +401,12 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4):
             "open_note": leg["until"], "items": items,
         })
     total_drive = sum(l["min"] for l in legs)
+    shortfalls = [{"key": k, "item_id": c["item_id"], "name": c["name"], "label": c["label"],
+                   "priority": c["priority"], "qty": c["qty"], "found": c["qty"] - left[k], "missing": left[k]}
+                  for k, c in by_key.items() if 0 < left[k] < c["qty"]]
     return {"stops": stops, "total_km": round(sum(l["km"] for l in legs), 1),
             "total_drive_min": total_drive, "total_min": total_drive + SHOPPING_MIN * len(stops),
-            "leaves": fmt_clock(now_min)}
+            "leaves": fmt_clock(now_min), "shortfalls": shortfalls}
 
 
 def render_plan_text(plan, brief=None, urgent=False):
@@ -379,14 +417,21 @@ def render_plan_text(plan, brief=None, urgent=False):
         lines.append("FIRST: if anyone is in danger, call 911 and get to safety before shopping.")
     if brief and brief.get("headline"):
         lines.append(brief["headline"])
+    def units(i):
+        if i["qty_needed"] > i["qty"]:
+            return " x%d of %d" % (i["qty"], i["qty_needed"])
+        return " x%d" % i["qty"] if i["qty"] > 1 else ""
+
     for stop in plan["route"]["stops"]:
         st = stop["store"]
-        names = ", ".join(("%s (instead of %s)" % (i["name"], i["replaces_name"]) if i["is_alt"] else i["name"])
-                          for i in stop["items"])
+        names = ", ".join(("%s%s (instead of %s)" % (i["name"], units(i), i["replaces_name"]) if i["is_alt"]
+                           else i["name"] + units(i)) for i in stop["items"])
         lines.append("%d. %s, %d min, %s km, arrive %s" % (stop["order"], st["name"], stop["leg_min"], stop["leg_km"], stop["arrive"]))
         lines.append("   Get: " + names)
     for u in plan["unresolved"]:
         lines.append("Not found nearby: " + u["name"])
+    for s in plan.get("shortfalls", []):
+        lines.append("Not enough in stock: %s, found %d of %d" % (s["name"], s["found"], s["qty"]))
     for a in plan["alternatives"]:
         if a.get("escalate"):
             lines.append("%s: %s" % (a["for_name"], a["escalate"]))
