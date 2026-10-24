@@ -365,8 +365,8 @@ class BrowserRegressions(unittest.TestCase):
 
     def test_route_survives_a_resize_that_arrives_before_the_layout_change(self):
         # Narrowing the window hides the map where it sits (CSS) until the layout code moves it into the plan.
-        # Whether the resize or the media-query change reaches the page first depends on the browser, and on
-        # Ubuntu runners it was often the resize: measuring the hidden map clipped the whole route away.
+        # Whether the resize or the media-query change reaches the page first is up to the browser. On GitHub's
+        # Ubuntu runners the resize sometimes came first, and measuring the hidden map clipped the whole route away.
         # Hold the media-query change back so the order is the unlucky one every time.
         self.page.add_init_script(HOLD_MEDIA_CHANGES)
         self.load()
