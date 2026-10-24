@@ -423,14 +423,19 @@ class BrowserRegressions(unittest.TestCase):
 
     def test_each_way_of_travelling_gets_its_own_agents_and_the_screen_lane_gets_its_path_first(self):
         self.load()
-        self.submit()
+        # Include an item that is still out downtown for both lanes (infant formula powder is rationed
+        # even at relief points near the epicenter) so each lane runs its own substitutes agent.
+        self.page.locator('#text').fill('I need baby formula, canned food and AA batteries')
+        self.page.locator('#text').press('Enter')
+        expect(self.page.locator('#planTitle')).to_be_visible()
+        expect(self.page.locator('#go')).to_be_enabled()
         self.lane_ready('walking')
         deadline = time.time() + 5
         while len(self.api_calls('route')) < 2 and time.time() < deadline:
             self.page.wait_for_timeout(50)
         self.assertEqual([b['mode'] for b in self.api_calls('route')], ['driving', 'walking'])
         self.assertEqual(sorted(b['mode'] for b in self.api_calls('brief')), ['driving', 'walking'])
-        # bottled water is out downtown for both, so each lane asks its own substitutes agent
+        # formula is out downtown for both, so each lane asks its own substitutes agent
         self.assertEqual(sorted(b['mode'] for b in self.api_calls('alternatives')), ['driving', 'walking'])
         self.assertEqual(len(self.searches), 1)                   # still one search per request
 
