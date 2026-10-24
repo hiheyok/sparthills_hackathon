@@ -5,19 +5,19 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SupplyLine: find supplies in a disaster</title>
 <meta name="description" content="Describe what you need in a disaster. SupplyLine finds the nearest open stores with stock, and a safe alternative when nobody has it.">
-<meta name="theme-color" content="#0a4da2">
+<meta name="theme-color" content="#722b42">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
 <link rel="preload" href="/static/fonts/overpass-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/vendor/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=6">
+<link rel="stylesheet" href="/static/styles.css?v=11">
 </head>
 <body>
 <a class="skip" href="#text">Skip to the request form</a>
 
 <header class="bar">
-  <a class="brand" href="/"><img src="/static/icon.svg" width="30" height="30" alt="">SupplyLine</a>
-  <span class="badge" id="dataBadge">Demo data</span>
+  <a class="brand" href="/" aria-label="SupplyLine home"><svg width="30" height="30" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m24 2 6 16 16 6-16 6-6 16-6-16L2 24l16-6L24 2Z" fill="currentColor"/><circle cx="24" cy="24" r="4.1" fill="var(--paper)"/></svg><span>SupplyLine</span></a>
+  <span class="badge" id="dataBadge"><span class="amber-dot" aria-hidden="true"></span>Demo data</span>
 </header>
 <div class="sos" role="note">
   <div class="sos-inner"><strong>In danger or a medical emergency? Call 911 first.</strong> Supplies can wait.</div>
@@ -26,23 +26,15 @@
 <main class="shell">
   <div class="col-main">
 
-    <section class="ask" aria-labelledby="h1">
+    <section class="ask hero" aria-labelledby="h1">
       <h1 id="h1">Tell us what happened and what you need.</h1>
       <p class="sub">We find open stores near you that have it, or something that does the same job.</p>
 
-      <form id="form" novalidate>
+      <form id="form" class="request-card" novalidate>
         <label for="text" class="sr">What is happening, and what do you need?</label>
         <textarea id="text" name="text" rows="3" maxlength="1500" autocomplete="off" enterkeyhint="search" aria-describedby="enterHint"
           placeholder="Example: Wildfire warning and the power is out. My dad uses insulin and it has to stay cold. We also have a baby who needs formula and diapers."></textarea>
         <p class="form-error" id="formError" role="alert" hidden></p>
-
-        <div class="try" role="group" aria-label="Example requests">
-          <span class="try-label">Try:</span>
-          <button type="button" class="chip-btn" data-example="0">Wildfire, insulin, baby</button>
-          <button type="button" class="chip-btn" data-example="1">Earthquake, no water</button>
-          <button type="button" class="chip-btn" data-example="2">Storm outage</button>
-          <span class="enter-hint" id="enterHint">Press Enter to search. Shift+Enter adds a new line.</span>
-        </div>
 
         <div class="where">
           <div class="field f-place">
@@ -62,6 +54,13 @@
           <button type="submit" class="btn" id="go">Find supplies</button>
         </div>
         <p class="hint" id="locHint" aria-live="polite"></p>
+
+        <div class="try" role="group" aria-label="Example requests">
+          <button type="button" class="chip-btn" data-example="0"><span aria-hidden="true">☂</span> Wildfire, insulin, baby <span aria-hidden="true">↗</span></button>
+          <button type="button" class="chip-btn" data-example="1"><span aria-hidden="true">≈</span> Earthquake, no water <span aria-hidden="true">↗</span></button>
+          <button type="button" class="chip-btn" data-example="2"><span aria-hidden="true">ϟ</span> Storm outage <span aria-hidden="true">↗</span></button>
+        </div>
+        <span class="enter-hint" id="enterHint">Press Enter to search. Shift+Enter adds a new line.</span>
       </form>
     </section>
 
@@ -77,6 +76,7 @@
     <div id="notice" class="notice" role="status" hidden></div>
 
     <div id="results" hidden>
+      <div class="results-toolbar"><button type="button" class="text-button" data-action="new-request">‹ New request</button></div>
       <section id="r-safety" aria-live="assertive"></section>
       <section id="r-mode" class="mode"></section>
       <section id="r-plan" class="plan" aria-labelledby="planTitle"></section>
@@ -93,9 +93,9 @@
 
   <aside class="col-map" aria-label="Map">
     <div id="map" role="img" aria-label="Map of your route"></div>
-    <p class="map-note" id="mapNote" aria-live="polite">Pick where you are and your route appears here.</p>
-    <a class="btn-small map-link" id="mapLink" target="_blank" rel="noopener" hidden>Turn-by-turn in Google Maps</a>
+    <div class="map-heading"><span class="map-heading-dot" aria-hidden="true"></span><h2>Nearby supplies</h2></div>
     <p class="map-note map-warn" id="mapWarn" role="status" hidden>The map background could not load (you may be offline). Your stops and route are still shown here and in the list.</p>
+    <div class="map-summary"><p class="map-note" id="mapNote" aria-live="polite">Pick where you are and your route appears here.</p><a class="btn-small map-link" id="mapLink" target="_blank" rel="noopener" hidden>Turn-by-turn in Google Maps</a></div>
   </aside>
 </main>
 
@@ -107,6 +107,7 @@
 <noscript><p class="noscript">SupplyLine needs JavaScript. In an emergency call 911. For local help dial 211.</p></noscript>
 
 <script src="/static/vendor/leaflet.js"></script>
-<script src="/static/app.js?v=8"></script>
+<script src="/static/maps.js?v=11"></script>
+<script src="/static/app.js?v=11"></script>
 </body>
 </html>

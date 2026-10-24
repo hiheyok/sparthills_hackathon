@@ -9,6 +9,8 @@
 #   STACK_NAME        CloudFormation stack name       (default supplyline)
 #   BEDROCK_REGION    region for Bedrock calls        (default = AWS_REGION)
 #   BEDROCK_MODEL_IDS comma-separated model IDs       (default: Claude Haiku 4.5, Nova 2 Lite, ...)
+#   GOOGLE_MAPS_API_KEY optional website-restricted Google Maps browser key
+#   GOOGLE_MAPS_MAP_ID  optional Google Maps map ID
 #   GUARDRAIL_ID      optional Bedrock Guardrail ID
 #   INVENTORY_SNAPSHOT_TS  unix seconds the demo inventory counts as observed (default: now)
 set -euo pipefail
@@ -63,6 +65,8 @@ aws s3 cp build/supplyline.zip "s3://$BUCKET/$KEY" --region "$REGION" --only-sho
 OVERRIDES=("CodeBucket=$BUCKET" "CodeKey=$KEY" "BedrockRegion=${BEDROCK_REGION:-$REGION}")
 [ -n "${BEDROCK_MODEL_IDS:-}" ] && OVERRIDES+=("BedrockModelIds=$BEDROCK_MODEL_IDS")
 [ -n "${GUARDRAIL_ID:-}" ] && OVERRIDES+=("GuardrailId=$GUARDRAIL_ID")
+[ -n "${GOOGLE_MAPS_API_KEY:-}" ] && OVERRIDES+=("GoogleMapsApiKey=$GOOGLE_MAPS_API_KEY")
+[ -n "${GOOGLE_MAPS_MAP_ID:-}" ] && OVERRIDES+=("GoogleMapsMapId=$GOOGLE_MAPS_MAP_ID")
 # The demo inventory is stamped with the deploy time, so all containers share one snapshot time.
 OVERRIDES+=("InventorySnapshotTs=${INVENTORY_SNAPSHOT_TS:-$(date +%s)}")
 
