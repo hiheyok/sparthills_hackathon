@@ -3,46 +3,45 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>SupplyLine: find supplies in a disaster</title>
+<title>SupplyLine · Find essential supplies</title>
 <meta name="description" content="Describe what you need in a disaster. SupplyLine finds the nearest open stores with stock, and a safe alternative when nobody has it.">
 <meta name="theme-color" content="#722b42">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="icon" href="/static/icon.svg" type="image/svg+xml">
-<link rel="preload" href="/static/fonts/overpass-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/vendor/leaflet.css">
-<link rel="stylesheet" href="/static/styles.css?v=13">
+<link rel="stylesheet" href="/static/styles.css?v=27">
+<link rel="stylesheet" href="/static/haven.css?v=10">
+<link rel="stylesheet" href="/static/haven-port.css?v=27">
+<link rel="stylesheet" href="/static/haven-home.css?v=2">
 </head>
-<body>
+<body class="app-shell">
 <a class="skip" href="#text">Skip to the request form</a>
 
-<header class="bar">
+<header class="bar site-header">
   <a class="brand" href="/" aria-label="SupplyLine home"><svg width="30" height="30" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m24 2 6 16 16 6-16 6-6 16-6-16L2 24l16-6L24 2Z" fill="currentColor"/><circle cx="24" cy="24" r="4.1" fill="var(--paper)"/></svg><span>SupplyLine</span></a>
-  <span class="badge" id="dataBadge"><span class="amber-dot" aria-hidden="true"></span>Demo data</span>
+  <nav aria-label="Main navigation"><button type="button" class="nav-link active" data-action="new-request"><svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 4 4"/></svg>Find supplies</button><button type="button" class="nav-link" data-action="saved-list"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4Z"/></svg>My supply lists<span id="savedCount" class="nav-count" hidden></span></button></nav>
+  <div class="header-right"><button type="button" class="badge demo-badge" id="dataBadge" data-action="settings"><span class="amber-dot" aria-hidden="true"></span>Demo workspace <span aria-hidden="true">⌄</span></button><button type="button" class="avatar" data-action="settings" aria-label="Workspace settings">M</button><button type="button" class="help-button" data-action="how" aria-label="Help" title="Help" aria-haspopup="dialog" aria-controls="howDialog"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.6 9a2.4 2.4 0 0 1 4.8 0c0 1.6-2.4 1.8-2.4 3.5"/><path d="M12 16h.01"/></svg></button></div>
 </header>
-<div class="sos" role="note">
-  <div class="sos-inner"><strong>In danger or a medical emergency? Call 911 first.</strong> Supplies can wait.</div>
-</div>
+<main class="shell home">
+  <div class="col-main plan-panel">
+    <section class="hero" id="hero" aria-labelledby="h1"><div class="hero-copy"><h1 id="h1">Find supplies<br>near you.</h1></div><div class="hero-art" aria-hidden="true"><div class="art-orbit one"></div><div class="art-orbit two"></div><div class="hero-map"><svg class="map-drawing" viewBox="0 0 800 700" preserveAspectRatio="xMidYMid slice" aria-hidden="true"><defs><pattern id="blocks-h" x="-20" y="-20" width="104" height="86" patternTransform="rotate(-24 400 350)" patternUnits="userSpaceOnUse"><rect width="104" height="86" fill="#f1eee7"/><rect x="9" y="9" width="86" height="68" rx="5" fill="#e9e5dc"/><path d="M0 0H104M0 0V86" stroke="#fffdf9" stroke-width="9"/></pattern></defs><rect width="800" height="700" fill="url(#blocks-h)"/><path d="M-70 100C100 130 170 240 140 340S230 500 150 760" fill="none" stroke="#d7e8e4" stroke-width="62"/><path d="M-70 100C100 130 170 240 140 340S230 500 150 760" fill="none" stroke="#c4dbd7" stroke-width="2"/><path d="m150 95 130-30 42 96-121 44Z M500 505l120-50 55 108-113 43Z M555 90l125-53 39 90-120 50Z" fill="#dce4d0"/><path d="M-20 490 810 100M200-20 605 730" stroke="#e5ddcd" stroke-width="18"/><path d="M-20 490 810 100M200-20 605 730" stroke="#fffdf8" stroke-width="12"/><path d="M-30 599 785 215" stroke="#fffdfa" stroke-width="12"/><path d="M-40 360 760-20" stroke="#fffdfa" stroke-width="12"/><path d="m240 490 75-96 157-52 74-110" fill="none" stroke="#8d4559" stroke-width="4" stroke-dasharray="6 9" stroke-linecap="round" opacity=".65"/></svg><div class="art-map-pin b"><svg width="17" height="17" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m24 2 6 16 16 6-16 6-6 16-6-16L2 24l16-6L24 2Z" fill="currentColor"/><circle cx="24" cy="24" r="4.1" fill="var(--paper)"/></svg></div><div class="art-map-pin c"><svg width="17" height="17" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m24 2 6 16 16 6-16 6-6 16-6-16L2 24l16-6L24 2Z" fill="currentColor"/><circle cx="24" cy="24" r="4.1" fill="var(--paper)"/></svg></div><div class="art-you"></div></div><div class="hero-click-ring"></div><div class="art-map-pin a hero-target"><svg width="26" height="26" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m24 2 6 16 16 6-16 6-6 16-6-16L2 24l16-6L24 2Z" fill="currentColor"/><circle cx="24" cy="24" r="4.1" fill="var(--paper)"/></svg></div><div class="hero-stock-preview"><div class="hero-stock-heading"><span>Parkside Market</span><small>Sample</small></div><div class="hero-stock-row"><span>Water</span><b>36 gal</b></div><div class="hero-stock-row"><span>Food</span><b>72 servings</b></div><div class="hero-stock-row"><span>Hygiene</span><b>28 kits</b></div></div><svg class="hero-demo-cursor" viewBox="0 0 30 36" fill="none"><path d="M3 2v24l6-6 6 12 5-2-6-12 10-1L3 2Z" fill="#542739" stroke="#fffefa" stroke-width="2.1" stroke-linejoin="round"/></svg></div></section>
 
-<main class="shell">
-  <div class="col-main">
-
-    <section class="ask hero" aria-labelledby="h1">
-      <h1 id="h1">Tell us what happened and what you need.</h1>
-      <p class="sub">We find open stores near you that have it, or something that does the same job.</p>
+    <section class="ask" aria-labelledby="requestTitle">
+      <h2 id="requestTitle" class="sr">Your request</h2>
 
       <form id="form" class="request-card" novalidate>
-        <label for="text" class="sr">What is happening, and what do you need?</label>
-        <textarea id="text" name="text" rows="3" maxlength="1500" autocomplete="off" enterkeyhint="search" aria-describedby="enterHint"
-          placeholder="Example: Wildfire warning and the power is out. My dad uses insulin and it has to stay cold. We also have a baby who needs formula and diapers."></textarea>
+        <div class="request-field"><div class="request-mark"><svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="m24 2 6 16 16 6-16 6-6 16-6-16L2 24l16-6L24 2Z" fill="currentColor"/><circle cx="24" cy="24" r="4.1" fill="var(--paper)"/></svg></div><label for="text" class="sr">What is happening, and what do you need?</label>
+        <textarea id="text" name="text" rows="2" maxlength="1500" autocomplete="off" enterkeyhint="search" aria-describedby="enterHint"
+          placeholder="Describe your situation or the supplies you need…"></textarea></div>
         <p class="form-error" id="formError" role="alert" hidden></p>
 
-        <div class="where">
-          <div class="field f-place">
-            <label for="place">Where are you</label>
+        <div class="where request-bottom"><div class="request-context">
+          <div class="field f-place context-chip">
+            <label for="place" class="sr">Location</label>
             <select id="place" name="place"></select>
           </div>
-          <div class="field f-radius">
-            <label for="radius">Search within</label>
+          <div class="field f-radius context-chip">
+            <label for="radius" class="sr">Radius</label>
             <select id="radius" name="radius">
               <option value="3">2 miles</option>
               <option value="8" selected>5 miles</option>
@@ -50,18 +49,19 @@
               <option value="32">20 miles</option>
             </select>
           </div>
-          <button type="button" class="btn-quiet" id="locate">Use my location</button>
-          <button type="submit" class="btn" id="go">Find supplies</button>
+          <button type="button" class="btn-quiet" id="locate">Locate me</button>
+          </div><button type="submit" class="btn primary find-button" id="go">Find supplies</button>
         </div>
         <p class="hint" id="locHint" aria-live="polite"></p>
-
-        <div class="try" role="group" aria-label="Example requests">
-          <button type="button" class="chip-btn" data-example="0"><span aria-hidden="true">☂</span> Wildfire, insulin, baby <span aria-hidden="true">↗</span></button>
-          <button type="button" class="chip-btn" data-example="1"><span aria-hidden="true">≈</span> Earthquake, no water <span aria-hidden="true">↗</span></button>
-          <button type="button" class="chip-btn" data-example="2"><span aria-hidden="true">ϟ</span> Storm outage <span aria-hidden="true">↗</span></button>
+        <div class="try prompt-suggestions" role="group" aria-label="Example requests">
+          <button type="button" class="chip-btn suggestion-button" data-example="3"><span aria-hidden="true">☂</span> Hurricane <span aria-hidden="true">↗</span></button>
+          <button type="button" class="chip-btn suggestion-button" data-example="2"><span aria-hidden="true">ϟ</span> Power outage <span aria-hidden="true">↗</span></button>
+          <button type="button" class="chip-btn suggestion-button" data-example="4"><span aria-hidden="true">≈</span> Flood <span aria-hidden="true">↗</span></button>
+          <button type="button" class="chip-btn suggestion-button" data-example="5"><span aria-hidden="true">≋</span> Tornado <span aria-hidden="true">↗</span></button>
         </div>
-        <span class="enter-hint" id="enterHint">Press Enter to search. Shift+Enter adds a new line.</span>
+        <p class="enter-hint" id="enterHint">Enter to search · Shift+Enter for a new line</p>
       </form>
+      <p class="home-emergency-note" role="note">In danger or a medical emergency? Call 911 first.</p>
     </section>
 
     <section class="progress" id="progress" aria-label="Progress" hidden>
@@ -76,38 +76,68 @@
     <div id="notice" class="notice" role="status" hidden></div>
 
     <div id="results" hidden>
-      <div class="results-toolbar"><button type="button" class="text-button" data-action="new-request">‹ New request</button></div>
+      <div class="results-toolbar plan-top"><button type="button" class="text-button" data-action="new-request">‹ New request</button><div class="plan-actions"><button type="button" id="askPlan" class="ask-plan" data-action="ask-plan" aria-haspopup="dialog" aria-controls="planAssistant" disabled>Ask about plan</button><button type="button" class="icon-btn" data-action="save-list" aria-label="Save supply list" title="Save supply list"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M6 4h12v17l-6-4-6 4Z"/></svg></button><button type="button" class="icon-btn" data-action="download" aria-label="Download supply list" title="Download supply list">↓</button></div></div>
       <section id="r-safety" aria-live="assertive"></section>
-      <section id="r-mode" class="mode"></section>
+      <section id="r-mode" class="mode" aria-label="Travel options"></section>
       <section id="r-plan" class="plan" aria-labelledby="planTitle"></section>
+      <section id="r-checklist" class="supply-checklist" aria-label="Supply checklist"></section>
+      <section id="r-route" class="route-extras" aria-label="Pickup route and notes"></section>
       <section id="r-actions" class="actions"></section>
-      <section id="r-alts" class="alts"></section>
       <section id="r-items" class="items"></section>
       <section id="r-understood" class="understood"></section>
-      <section id="r-followup" class="followup"></section>
       <section id="r-trace" class="trace"></section>
     </div>
 
     <section id="saved" class="saved" hidden></section>
   </div>
 
-  <aside class="col-map" aria-label="Map">
-    <div id="map" role="img" aria-label="Map of your route"></div>
-    <div class="map-heading"><span class="map-heading-dot" aria-hidden="true"></span><h2>Nearby supplies</h2></div>
-    <p class="map-note map-warn" id="mapWarn" role="status" hidden>The map background could not load (you may be offline). Your stops and route are still shown here and in the list.</p>
-    <div class="map-summary"><p class="map-note" id="mapNote" aria-live="polite">Pick where you are and your route appears here.</p><a class="btn-small map-link" id="mapLink" target="_blank" rel="noopener" hidden>Turn-by-turn in Google Maps</a></div>
+  <div id="panelDivider" class="panel-divider" role="separator" aria-label="Resize results panel" aria-orientation="vertical" aria-controls="results" tabindex="0" title="Drag to resize · Double-click to reset"></div>
+  <aside class="col-map map-panel" aria-label="Map">
+    <div id="map" role="region" aria-label="Interactive map of your supply route"></div>
+    <div class="map-heading"><span class="map-heading-dot" aria-hidden="true"></span><div><h2>Nearby supplies</h2><p id="mapLocation">San José</p></div></div>
+    <div class="map-tools" aria-label="Map controls">
+      <button type="button" data-action="recenter-map" aria-label="Recenter map" title="Recenter map"><svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3"/></svg></button>
+      <button type="button" id="expandMap" class="fullscreen-button" data-action="expand-map" aria-pressed="false" aria-label="Expand map" title="Expand map"><svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M8 3H3v5m13-5h5v5M3 16v5h5m13-5v5h-5"/></svg><span>Full screen</span></button>
+    </div>
+    <div class="map-summary"><p class="map-note" id="mapNote" aria-live="polite">Select your location to get started.</p><a class="btn-small map-link" id="mapLink" target="_blank" rel="noopener" hidden>Directions ↗</a></div>
+    <p class="map-note map-warn" id="mapWarn" role="status" hidden>Map offline. Stops and directions still work.</p>
   </aside>
 </main>
+<main id="savedPage" class="saved-page" hidden aria-labelledby="savedTitle"><h1 id="savedTitle">My supply lists</h1><div id="savedLists" class="saved-grid"></div><p class="device-note">Saved on this browser and device.</p></main>
 
-<footer class="foot">
-  <p>SupplyLine is a hackathon prototype. Store names, locations and stock levels are fictional demo data, and drive and walk times are estimates, not live traffic or live conditions. This is not medical advice. In an emergency, call 911. For local help, dial 211.</p>
-</footer>
+<footer class="foot site-footer"><span>SupplyLine · Demo inventory</span><div><button type="button" data-action="about">About</button><span>Sparthill Hacks 2026</span><button type="button" class="icon-btn" data-action="settings" aria-label="Connections">⚙</button></div></footer>
 
+<dialog id="howDialog" aria-labelledby="howTitle"><div class="dialog-heading"><h2 id="howTitle">How it works</h2><button type="button" class="btn-small" data-action="close-how" aria-label="Close how it works">✕</button></div><ol class="how-steps"><li><span>01</span><h3>Tell us what’s happening</h3><p>Describe your situation, choose your location, and set a search radius.</p></li><li><span>02</span><h3>Make a supply plan</h3><p>Find nearby stock, suitable alternatives, and a route between stores.</p></li><li><span>03</span><h3>Keep it close</h3><p>Check off supplies, download your plan, or reopen your last plan offline.</p></li></ol><p class="hint">Inventory is fictional demo data. Confirm stock and access before traveling. Follow official local emergency instructions.</p></dialog>
+<dialog id="settingsDialog" aria-labelledby="settingsTitle"><div class="dialog-heading"><h2 id="settingsTitle">Connections</h2><button type="button" class="icon-btn" data-action="close-settings" aria-label="Close connections">×</button></div><div class="connection-item"><span class="connection-logo">↗</span><div><h3>Google Maps</h3><p id="mapsConnection"></p></div></div><div class="connection-item"><span class="connection-logo aws">aws</span><div><h3>Amazon Bedrock</h3><p id="aiConnection"></p></div></div><div class="connection-item"><span class="connection-logo">□</span><div><h3>Inventory</h3><p>Demo stores and stock. Confirm before traveling.</p></div></div></dialog>
+<dialog id="planAssistant" class="plan-assistant" aria-labelledby="assistantTitle" aria-describedby="assistantIntro">
+  <div class="dialog-heading"><h2 id="assistantTitle">Ask about your plan</h2><button type="button" class="icon-btn" data-action="close-assistant" aria-label="Close plan assistant">×</button></div>
+  <p id="assistantContext" class="assistant-context"></p>
+  <p id="assistantIntro">Questions about stores, alternatives, or getting there? Ask using the details in your supply plan.</p>
+  <div class="assistant-prompts" role="group" aria-label="Suggested questions">
+    <button type="button" data-action="assistant-prompt" data-question="Should I walk or drive for this plan?">Walk or drive?</button>
+    <button type="button" data-action="assistant-prompt" data-question="Which supplies could not be found, and what alternatives are available?">What alternatives are available?</button>
+    <button type="button" data-action="assistant-prompt" data-question="Which store should I visit first, and why?">Which store first?</button>
+  </div>
+  <form id="assistantForm">
+    <label for="assistantQuestion">Your question</label>
+    <textarea id="assistantQuestion" rows="2" minlength="3" maxlength="400" required placeholder="What would you like to know?" enterkeyhint="send"></textarea>
+    <div class="assistant-form-actions"><span>Enter to ask · Shift+Enter for a new line</span><button id="assistantSend" class="primary" type="submit">Ask</button></div>
+  </form>
+  <p id="assistantStatus" class="assistant-status" role="status" hidden>Reading your plan…</p>
+  <p id="assistantError" class="form-error" role="alert" hidden></p>
+  <section id="assistantReply" class="assistant-reply" aria-label="Answer" hidden>
+    <p id="assistantAsked" class="assistant-asked"></p>
+    <p id="assistantAnswer" aria-live="polite"></p>
+    <p id="assistantSource" class="assistant-source"></p>
+    <details id="assistantEvidence"><summary>Run details</summary><dl id="assistantMetrics"></dl></details>
+  </section>
+  <p class="assistant-footnote">Demo inventory. Confirm stock before traveling. Travel estimates exclude live traffic.</p>
+</dialog>
 <div id="toast" class="toast" role="status" aria-live="polite"></div>
 <noscript><p class="noscript">SupplyLine needs JavaScript. In an emergency call 911. For local help dial 211.</p></noscript>
 
 <script src="/static/vendor/leaflet.js"></script>
-<script src="/static/maps.js?v=13"></script>
-<script src="/static/app.js?v=13"></script>
+<script src="/static/maps.js?v=27"></script>
+<script src="/static/app.js?v=27"></script>
 </body>
 </html>

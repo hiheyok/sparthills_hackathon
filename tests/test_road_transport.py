@@ -21,6 +21,25 @@ CERT_ERROR = urllib.error.URLError(ssl.SSLCertVerificationError(1, 'certificate 
 
 
 class TransportTests(unittest.TestCase):
+    def test_macos_without_python_roots_uses_system_bundle_with_verification(self):
+        with mock.patch('road_transport.ssl.create_default_context') as create, \
+                mock.patch('road_transport.sys.platform', 'darwin'), \
+                mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch('road_transport.Path.is_file', return_value=True):
+            context = create.return_value
+            context.get_ca_certs.return_value = []
+            self.assertIs(road_transport._ssl_context(), context)
+            context.load_verify_locations.assert_called_once_with(cafile='/etc/ssl/cert.pem')
+
+    def test_custom_certificate_bundle_is_preserved(self):
+        with mock.patch('road_transport.ssl.create_default_context') as create, \
+                mock.patch('road_transport.sys.platform', 'darwin'), \
+                mock.patch.dict(os.environ, {'SSL_CERT_FILE': '/custom/trusted.pem'}):
+            context = create.return_value
+            context.get_ca_certs.return_value = []
+            road_transport._ssl_context()
+            context.load_verify_locations.assert_not_called()
+
     def test_windows_recovers_from_python_certificate_failure(self):
         with mock.patch.object(road_transport, 'IS_WINDOWS', True), \
                 mock.patch('road_transport.urllib.request.urlopen', side_effect=CERT_ERROR), \

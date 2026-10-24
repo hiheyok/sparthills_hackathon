@@ -915,6 +915,8 @@ def assistant(question, situation=None, plan_text=""):
 
     def parse(raw):
         ans = (raw or "").strip()
+        ans = re.sub(r'(\*\*|__)(.*?)\1', r'\2', ans, flags=re.DOTALL)
+        ans = re.sub(r'`([^`]+)`', r'\1', ans)
         if not ans:
             raise ValueError("empty answer")
         return ans[:900]

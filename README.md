@@ -6,6 +6,37 @@ Built for SpartHill Hacks 2026, AWS Track. Amazon Bedrock does the language work
 
 ![Architecture](docs/architecture.png)
 
+## Haven interface
+
+The web app ports Haven’s typography, cream-and-maroon palette, request card, suggestion buttons, checklist categories, connection dialog, and saved-list cards. The homepage keeps Haven’s illustration; searching opens the large map with recenter, zoom, and fullscreen controls. Drag the divider to resize the results panel, browse numbered locations by distance, and compare driving and walking details in the location card or popup. Free relief locations show their place-type badge. Street imagery uses Google Maps when a browser key is configured, with OpenStreetMap as an offline or setup fallback. The interface runs directly in the existing Python app with no JavaScript build step. Search, Bedrock stages, safety checks, road routing, reports, and offline storage still use this repository’s implementation.
+
+Supply checkboxes persist with the last automatic save. Use the bookmark button to keep named supply lists, open **My supply lists** to view or delete them, **Download** for a text copy with checklist progress, or select a map pin for the supplies matched at that store. The **How it works** dialog supports keyboard navigation and Escape. The original household and day-count settings are omitted. Driving and walking each have their own plan and can be compared using the travel buttons.
+
+Store popups, the nearest-store browser, and the “Start at” summary show opening status in Pacific time. Hours refresh every 15 seconds and when the app returns to the foreground, including in saved plans. Regular closures show the next daily opening time; unscheduled closures show that reopening is unconfirmed. These schedules are demo data, not live Google business hours.
+
+## Ask about your plan (Amazon Bedrock)
+
+Once your request is understood, select **Ask about plan** above the results. You can ask while the plans are still being prepared; the dialog identifies those preliminary answers. Ask about missing supplies, alternatives, stores, or whether to walk or drive. Suggested questions help start the interaction without adding another form at the bottom of the page.
+
+Questions call `/api/followup`, which rebuilds both plans on the server and sends their facts to Amazon Bedrock through the Converse API. Answers identify whether Bedrock or the rules fallback responded. **Run details** shows the actual model, region, elapsed time, and token usage; the same call appears in **Under the hood**. Closing the dialog keeps the current question and answer until the plan or travel mode changes.
+
+For live AI locally, install `boto3`, configure AWS credentials privately in your terminal or an AWS profile, then run:
+
+```bash
+python3 -m pip install boto3
+python3 local_server.py --ai bedrock --roads on
+```
+
+AWS credentials stay on the server. They are never needed in browser code or Git. Temporary hackathon credentials expire and must be refreshed through the event portal. `--ai off` deliberately uses the clearly labeled fallback; it is not evidence of a live Bedrock call.
+
+## Google Maps
+
+For local development, copy `.env.example` to `.env.local`, set `GOOGLE_MAPS_API_KEY`, and restart the server. The local file is ignored by Git and is not included in deployment packages. Exported environment variables take precedence. `GOOGLE_MAPS_MAP_ID` is optional and defaults to `DEMO_MAP_ID`; set your own map ID for production.
+
+The Maps JavaScript API key is intentionally sent to the browser through the uncached app metadata endpoint. Restrict a standard key to Maps JavaScript API and your website URLs, including `http://localhost:8080/*` for local use. A Google Maps Demo Key can be used for prototyping. Never use an unrestricted server credential here. See [Google's key setup](https://developers.google.com/maps/documentation/javascript/get-api-key).
+
+For AWS, set `GOOGLE_MAPS_API_KEY` and optionally `GOOGLE_MAPS_MAP_ID` in the deployment environment before running the existing deployment script. No key is embedded in the repository. If Google cannot load or authorize the key, a labeled OpenStreetMap backup keeps the route and supplies accessible. Saved plans continue to work offline. The map renderer does not change inventory or the existing routing service.
+
 ## The persona
 
 **Samantha is a family caregiver in San Jose.** She receives a wildfire warning from nearby and the power has gone out. She needs to take care of her baby and lacks the necessities. However, her phone has a weak signal and not that much time. She does not know which store has anything she needs.
@@ -20,7 +51,7 @@ The critical service is **getting essential supplies to a household during a dis
 2. **Finds real availability.** For each item it checks stock, how old the stock data is, and whether the store will still be open when you arrive.
 3. **Plans a route, on foot or by car.** Up to 4 stops that cover everything, with the most urgent items first. Drive and Walk are two separate plans, not one plan with two labels: on foot the range is shorter (3 km), every leg takes longer, and a store that is open when a car arrives can be closed by the time a walker does. The map draws a road route for driving and a footpath route for walking, and one tap opens the trip in Google Maps for turn-by-turn.
 4. **Finds alternatives when something is out.** Amazon Bedrock picks substitutes, but only from items confirmed in stock near you, and only from a hand-written safe list for risky items.
-5. **Explains it in plain language.** A short briefing for each way of getting there, an assistant you can ask about your own situation (for example "should I walk or drive?"), and copy, text-message and print options.
+5. **Explains it in plain language.** A short briefing, a plan-question dialog, and copy, text-message and print options.
 6. **Takes neighbor reports.** "Has it", "Running low", "Sold out", "It is closed". Reports expire after 6 hours.
 7. **Never gambles with safety.** See below.
 

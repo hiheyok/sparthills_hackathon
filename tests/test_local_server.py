@@ -5,7 +5,9 @@ import json
 import os
 import socket
 import sys
+import tempfile
 import threading
+from pathlib import Path
 import unittest
 from http.client import HTTPResponse
 from unittest import mock
@@ -18,6 +20,18 @@ import roads
 
 
 class LocalRoutingTests(unittest.TestCase):
+    def test_map_settings_load_without_overriding_exported_credentials(self):
+        with tempfile.TemporaryDirectory() as folder, mock.patch.dict(os.environ, {}, clear=True), \
+                mock.patch.object(local_server, 'ROOT', Path(folder)):
+            Path(folder, '.env.local').write_text('GOOGLE_MAPS_API_KEY=local-test-key\nGOOGLE_MAPS_MAP_ID=demo-map\nUNRELATED_SETTING=ignored\n')
+            local_server.load_local_settings()
+            self.assertEqual(os.environ['GOOGLE_MAPS_API_KEY'], 'local-test-key')
+            self.assertEqual(os.environ['GOOGLE_MAPS_MAP_ID'], 'demo-map')
+            self.assertNotIn('UNRELATED_SETTING', os.environ)
+            os.environ['GOOGLE_MAPS_API_KEY'] = 'exported-key'
+            local_server.load_local_settings()
+            self.assertEqual(os.environ['GOOGLE_MAPS_API_KEY'], 'exported-key')
+
     def test_explicit_roads_on_overrides_environment_without_starting_server(self):
         output = io.StringIO()
         with mock.patch.dict(os.environ, {'ROAD_ROUTING': 'off'}), \

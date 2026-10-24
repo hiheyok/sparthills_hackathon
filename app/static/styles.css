@@ -1,6 +1,5 @@
-/* SupplyLine. Wayfinding-sign visual language: blue is the route, yellow is a
-   reroute or caution, green is in stock, red is safety. Colour never carries
-   meaning alone: every status also has a text label. */
+/* Supply plan components with the Haven theme below.
+   Every stock and safety status includes a text label. */
 
 @font-face { font-family: "Overpass"; src: url("/static/fonts/overpass-latin-wght-normal.woff2") format("woff2");
   font-weight: 100 900; font-style: normal; font-display: swap; }

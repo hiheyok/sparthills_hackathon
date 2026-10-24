@@ -418,6 +418,12 @@ class BriefTests(Base):
 
 
 class FollowupTests(Base):
+    def test_followup_removes_model_formatting_from_plain_text_answers(self):
+        ai.set_client(FakeBedrock(['Visit **Fresh Basket** at `10:00 AM`.']))
+        ans, trace = ai.followup('Which store first?', 'PLAN text')
+        self.assertEqual(ans, 'Visit Fresh Basket at 10:00 AM.')
+        self.assertEqual(trace['mode'], 'bedrock')
+
     def test_followup_returns_plain_text(self):
         ai.set_client(FakeBedrock(["Yes. Keep the insulin cool, not frozen."]))
         ans, trace = ai.followup("Can the insulin go in the cooler?", "PLAN text")

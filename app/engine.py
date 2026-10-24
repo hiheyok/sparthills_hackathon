@@ -138,6 +138,7 @@ def _store_view(s, dist_km, eta, until, q, age, source, qty_wanted):
         "id": s["id"], "name": s["name"], "type": s["type"], "hood": s["hood"],
         "kind": s.get("kind", "Store"), "free": bool(s.get("free")),
         "lat": s["lat"], "lng": s["lng"],
+        "hours": dict(s["hours"]), "status": s["status"],
         "dist_km": round(dist_km, 1), "eta_min": eta,
         "open_note": until, "store_note": s["note"] if s["status"] == "limited" else "",
         "q": q, "low": q <= LOW_Q, "short": q < qty_wanted,
@@ -465,6 +466,7 @@ def plan_route(chosen, lat, lng, now_min, reports, max_stops=4, mode=DEFAULT_MOD
             "store": {"id": sid, "name": s["name"], "type": s["type"], "hood": s["hood"],
                       "kind": s.get("kind", "Store"), "free": bool(s.get("free")),
                       "lat": s["lat"], "lng": s["lng"],
+                      "hours": dict(s["hours"]), "status": s["status"],
                       "store_note": s["note"] if s["status"] == "limited" else ""},
             "leg_km": round(leg["km"], 1), "leg_min": leg["min"], "arrive": fmt_clock(leg["arrive"]),
             "open_note": leg["until"], "items": items,
@@ -485,7 +487,7 @@ def render_plan_text(plan, brief=None, urgent=False):
     from the structured plan (not from AI prose) so it is always consistent."""
     mode = plan.get("mode", DEFAULT_MODE)
     word = MODES[mode]["word"]
-    lines = ["SUPPLYLINE PLAN (" + fmt_clock(plan["start_min"]) + (", on foot" if mode == "walking" else "") + ")"]
+    lines = ["SupplyLine PLAN (" + fmt_clock(plan["start_min"]) + (", on foot" if mode == "walking" else "") + ")"]
     if urgent:
         lines.append("FIRST: if anyone is in danger, call 911 and get to safety before shopping.")
     if brief and brief.get("headline"):
